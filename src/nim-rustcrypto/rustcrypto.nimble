@@ -1,11 +1,10 @@
 # Package
 
-version       = "0.1.7"
+version       = "0.1.8"
 author        = "Anonymous"
 description   = "A new awesome nimble package"
 license       = "MIT"
 srcDir        = "src"
-installDirs   = @["src"]
 
 
 # Dependencies
