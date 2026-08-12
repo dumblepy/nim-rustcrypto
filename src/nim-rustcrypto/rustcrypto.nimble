@@ -6,14 +6,6 @@ description   = "A new awesome nimble package"
 license       = "MIT"
 srcDir        = "src"
 
-installDirs   = @[
-  "../src/rustcrypto",
-]
-
-installFiles  = @[
-  "../src/rustcrypto.nim",
-]
-
 
 # Dependencies
 
