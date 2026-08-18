@@ -5,7 +5,8 @@ author        = "Anonymous"
 description   = "A new awesome nimble package"
 license       = "MIT"
 srcDir        = "src"
-installDirs   = @["src"]
+installDirs   = @["rustcrypto"]
+installFiles  = @["rustcrypto.nim"]
 
 
 # Dependencies

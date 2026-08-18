@@ -49,7 +49,7 @@ alwaysApply: false
 - `src/nim-rustcrypto/rustcrypto.nimble` には、Linux amd64の `before install` で `fetchRustFfiCommand()` を実行する設計が既に入っている。この導線は「インストール時に `.a` もダウンロードされる」要件に合うため、まず壊さずに活かす。
 - `fetchRustFfi` は、GitHub Release asset `rustcrypto-ffi-v{version}-linux-x86_64.tar.gz` を取得し、module vendor配下へ展開する補助タスクとして扱う。通常利用者は明示実行しなくても、Linux amd64ではNimble install hookから呼ばれる状態を目標にする。
 - `before install` は利用者環境でネットワーク、curl、tar、sha256sumに依存する。Release assetからの取得に失敗した場合は、エラーメッセージで `nimble fetchRustFfi` と `nimble buildRustFfiLocal` を回復手段として案内する。
-- Release workflowでは `nimble test -y` の前に `jiro4989/setup-nim-action@v2` などでNimを入れる。`nim-version` は `rustcrypto.nimble` の `requires "nim >= 2.0.0"` と合わせ、まず `2.0.x` または安定版を使う。rate limit回避のため `repo-token: ${{ secrets.GITHUB_TOKEN }}` を渡してよい。
+- Release workflowでは `nimble test -y` の前に `jiro4989/setup-nim-action@v2` などでNimを入れる。`nim-version` は `rustcrypto.nimble` の `requires "nim >= 2.2.0"` と合わせ、まず `2.2.x` または安定版を使う。rate limit回避のため `repo-token: ${{ secrets.GITHUB_TOKEN }}` を渡してよい。
 - Release workflowの権限はRelease asset公開があるため `contents: write` を維持する。ただし、Nim setupやテスト自体にwrite権限を使わせる設計にはしない。
 - Rust FFIの生成元は `src/rustcrypto-ffi/target/release/librust_crypto_ffi.a` とする。workflowでは `cargo test`、`cargo build --release --lib`、生成物の存在確認と非0バイト確認を行ってからNim vendorへ同期する。
 - Release workflow内のNimテストは、同期済みvendorアーカイブでリンクできることを確認する目的で実行する。`nimble test -y` 実行前に `nim -v` と `nimble -v` を出して、今回の `nimble: command not found` の再発を即座に判別できるログにする。

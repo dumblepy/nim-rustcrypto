@@ -36,7 +36,7 @@ jobs:
       - name: Install Nim toolchain
         uses: jiro4989/setup-nim-action@v2
         with:
-          nim-version: "2.0.x"
+          nim-version: "2.2.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # runner 側の PATH 問題を早期に検出できるよう、利用する Nim/Nimble をログに残す。
@@ -187,7 +187,7 @@ jobs:
       - name: Install Nim toolchain
         uses: jiro4989/setup-nim-action@v2
         with:
-          nim-version: "2.0.x"
+          nim-version: "2.2.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Print Nim versions
