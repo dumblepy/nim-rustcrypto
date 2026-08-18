@@ -4,8 +4,7 @@ version       = "0.1.10"
 author        = "Anonymous"
 description   = "A new awesome nimble package"
 license       = "MIT"
-srcDir        = ""
-paths         = @["src"]
+srcDir        = "src"
 installDirs   = @["src"]
 
 
