@@ -25,6 +25,6 @@ when (defined(linux) and defined(amd64)) or (defined(macosx) and defined(arm64))
 
 task buildRustFfiLocal, "Build Rust FFI static archive locally and sync it":
   exec "rustup target add wasm32-unknown-unknown wasm32-wasip1"
-  exec "cd ../rustcrypto-ffi && cargo build --release --lib"
-  exec "cd ../rustcrypto-ffi && cargo build --release --lib --target wasm32-unknown-unknown"
-  exec "cd ../rustcrypto-ffi && cargo build --release --lib --target wasm32-wasip1"
+  exec "cargo build --manifest-path rustcrypto-ffi/Cargo.toml --release --lib"
+  exec "cargo build --manifest-path rustcrypto-ffi/Cargo.toml --release --lib --target wasm32-unknown-unknown"
+  exec "cargo build --manifest-path rustcrypto-ffi/Cargo.toml --release --lib --target wasm32-wasip1"

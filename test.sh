@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "==> Rust tests"
-cd "$repo_root/src/rustcrypto-ffi"
+cd "$repo_root/rustcrypto-ffi"
 cargo test
 cargo build --release --lib
 test -s target/release/librust_crypto_ffi.a
@@ -20,11 +20,11 @@ else
 fi
 
 echo "==> Sync Rust static library"
-cd "$repo_root/src/nim-rustcrypto"
+cd "$repo_root"
 nim r --hints:off --warnings:off src/rustcrypto/tools/sync_local_rustcrypto_ffi.nim
 
 echo "==> Nim tests"
-cd "$repo_root/src/nim-rustcrypto"
+cd "$repo_root"
 nimble test -y
 
 echo "==> Nim exec smoke (native Linux x86_64, ci/rustcrypto_exec_smoke.nim)"

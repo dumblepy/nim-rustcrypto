@@ -34,8 +34,8 @@ Lint可能化のため、規範ルールは **Rule ID** を持つ。
 | SYW-FFI-002 | MUST | manual | Rust FFI実装 | FFI境界を越えてpanicを漏らさない |
 | SYW-FFI-003 | MUST | manual | バッファ設計 | 所有権をRust/Nim間でまたがせない |
 | SYW-BUILD-001 | MUST | config | Cargo.toml | C/Nimリンク用に`staticlib`を出力する |
-| SYW-BUILD-002 | MUST | manual | Rustビルド | `/application/src/rustcrypto-ffi` で実行する |
-| SYW-BUILD-003 | MUST | manual | Nimビルド | `/application/src/nim-rustcrypto` で実行する |
+| SYW-BUILD-002 | MUST | manual | Rustビルド | `/application/rustcrypto-ffi` で実行する |
+| SYW-BUILD-003 | MUST | manual | Nimビルド | `/application` で実行する |
 | SYW-BUILD-004 | MUST | manual | 対象環境 | まずUbuntuで動くものを作る |
 | SYW-DEPS-001 | MUST | manual | 外部パッケージ追加 | `cargo`や`nimble`などCLIで追加する |
 | SYW-DEV-001 | MUST | manual | 開発手順 | Rust/Nimともテスト駆動開発で進める |
@@ -64,9 +64,9 @@ Lint可能化のため、規範ルールは **Rule ID** を持つ。
 
 [SYW-BUILD-001][MUST][config] Rust crateはC/Nimからリンクするため、`Cargo.toml`の`[lib]`で`crate-type = ["staticlib"]`を指定する。動的ライブラリが必要な場合のみ、設計理由を残して`cdylib`を追加してよい。
 
-[SYW-BUILD-002][MUST][manual] Rustをビルドする時は、作業ディレクトリを `/application/src/rustcrypto-ffi` に移動してから `cargo` コマンドを実行する。
+[SYW-BUILD-002][MUST][manual] Rustをビルドする時は、作業ディレクトリを `/application/rustcrypto-ffi` に移動してから `cargo` コマンドを実行する。
 
-[SYW-BUILD-003][MUST][manual] Nimをビルドする時は、作業ディレクトリを `/application/src/nim-rustcrypto` に移動してから `nimble` または `nim` コマンドを実行する。
+[SYW-BUILD-003][MUST][manual] Nimをビルドする時は、作業ディレクトリを `/application` に移動してから `nimble` または `nim` コマンドを実行する。
 
 [SYW-BUILD-004][MUST][manual] 現時点ではWindowsは対象外とし、まずUbuntuでビルド・実行・検証できるものを作る。Windowsやその他OSへの対応は、Ubuntuでの最小実装が安定してから別途扱う。
 

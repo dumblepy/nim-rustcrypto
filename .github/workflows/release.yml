@@ -62,13 +62,13 @@ jobs:
       # まず Rust 側のユニットテストを回して、リリース前提の健全性を確認する。
       - name: Run Rust tests
         run: |
-          cd src/rustcrypto-ffi
+          cd rustcrypto-ffi
           cargo test
 
       # release 用の静的ライブラリを生成する。
       - name: Build Rust static library
         run: |
-          cd src/rustcrypto-ffi
+          cd rustcrypto-ffi
           cargo build --release --lib
           test -s target/release/librust_crypto_ffi.a
           cargo build --release --lib --target wasm32-unknown-unknown
@@ -79,20 +79,20 @@ jobs:
       # 生成物を Nim パッケージの vendor 配置へ同期し、同封物としても利用できることを確認する。
       - name: Sync Rust static library to Nim vendor tree
         run: |
-          mkdir -p src/nim-rustcrypto/src/rustcrypto/vendor/rustcrypto-ffi/linux-x86_64
-          mkdir -p src/nim-rustcrypto/src/rustcrypto/vendor/rustcrypto-ffi/wasm32-unknown-unknown
-          mkdir -p src/nim-rustcrypto/src/rustcrypto/vendor/rustcrypto-ffi/wasm32-wasip1
-          cp src/rustcrypto-ffi/target/release/librust_crypto_ffi.a \
-            src/nim-rustcrypto/src/rustcrypto/vendor/rustcrypto-ffi/linux-x86_64/librust_crypto_ffi-linux-x86_64.a
-          cp src/rustcrypto-ffi/target/wasm32-unknown-unknown/release/librust_crypto_ffi.a \
-            src/nim-rustcrypto/src/rustcrypto/vendor/rustcrypto-ffi/wasm32-unknown-unknown/librust_crypto_ffi-wasm32-unknown-unknown.a
-          cp src/rustcrypto-ffi/target/wasm32-wasip1/release/librust_crypto_ffi.a \
-            src/nim-rustcrypto/src/rustcrypto/vendor/rustcrypto-ffi/wasm32-wasip1/librust_crypto_ffi-wasm32-wasip1.a
+          mkdir -p src/rustcrypto/vendor/rustcrypto-ffi/linux-x86_64
+          mkdir -p src/rustcrypto/vendor/rustcrypto-ffi/wasm32-unknown-unknown
+          mkdir -p src/rustcrypto/vendor/rustcrypto-ffi/wasm32-wasip1
+          cp rustcrypto-ffi/target/release/librust_crypto_ffi.a \
+            src/rustcrypto/vendor/rustcrypto-ffi/linux-x86_64/librust_crypto_ffi-linux-x86_64.a
+          cp rustcrypto-ffi/target/wasm32-unknown-unknown/release/librust_crypto_ffi.a \
+            src/rustcrypto/vendor/rustcrypto-ffi/wasm32-unknown-unknown/librust_crypto_ffi-wasm32-unknown-unknown.a
+          cp rustcrypto-ffi/target/wasm32-wasip1/release/librust_crypto_ffi.a \
+            src/rustcrypto/vendor/rustcrypto-ffi/wasm32-wasip1/librust_crypto_ffi-wasm32-wasip1.a
 
       # 同封済みの静的アーカイブで Nim テストを回し、Rust 側の生成物とパッケージ配布形態を両方確認する。
       - name: Run Nim tests
         run: |
-          cd src/nim-rustcrypto
+          cd "$GITHUB_WORKSPACE"
           nimble test -y
 
       # 利用側プロジェクト相当の一時環境で、Nimble install 後に import とリンクが通ることを確認する。
@@ -101,7 +101,7 @@ jobs:
         run: |
           set -eu
           consumer_dir="$(mktemp -d)"
-          package_dir="$PWD/src/nim-rustcrypto"
+          package_dir="$GITHUB_WORKSPACE"
           export NIMBLE_DIR="$consumer_dir/.nimble"
           mkdir -p "$consumer_dir/app"
           cd "$consumer_dir/app"
@@ -130,7 +130,7 @@ jobs:
       # 追加で必要になるネイティブ静的ライブラリをログに残す。
       - name: Print native static libs
         run: |
-          cd src/rustcrypto-ffi
+          cd rustcrypto-ffi
           cargo rustc --release --lib -- --print native-static-libs | tee native-static-libs.txt
 
       # 配布用の tar.gz に入れるディレクトリ構造を作り、checksum も生成する。
@@ -138,16 +138,16 @@ jobs:
         shell: bash
         run: |
           version="${{ steps.version.outputs.version }}"
-          archive_dir="src/rustcrypto-ffi/dist"
+          archive_dir="rustcrypto-ffi/dist"
           mkdir -p \
             "$archive_dir/rustcrypto-ffi/linux-x86_64" \
             "$archive_dir/rustcrypto-ffi/wasm32-unknown-unknown" \
             "$archive_dir/rustcrypto-ffi/wasm32-wasip1"
-          cp src/rustcrypto-ffi/target/release/librust_crypto_ffi.a \
+          cp rustcrypto-ffi/target/release/librust_crypto_ffi.a \
             "$archive_dir/rustcrypto-ffi/linux-x86_64/librust_crypto_ffi-linux-x86_64.a"
-          cp src/rustcrypto-ffi/target/wasm32-unknown-unknown/release/librust_crypto_ffi.a \
+          cp rustcrypto-ffi/target/wasm32-unknown-unknown/release/librust_crypto_ffi.a \
             "$archive_dir/rustcrypto-ffi/wasm32-unknown-unknown/librust_crypto_ffi-wasm32-unknown-unknown.a"
-          cp src/rustcrypto-ffi/target/wasm32-wasip1/release/librust_crypto_ffi.a \
+          cp rustcrypto-ffi/target/wasm32-wasip1/release/librust_crypto_ffi.a \
             "$archive_dir/rustcrypto-ffi/wasm32-wasip1/librust_crypto_ffi-wasm32-wasip1.a"
           tar -C "$archive_dir" -czf "$archive_dir/rustcrypto-ffi-v${version}-linux-x86_64.tar.gz" rustcrypto-ffi/linux-x86_64
           (cd "$archive_dir" && sha256sum "rustcrypto-ffi-v${version}-linux-x86_64.tar.gz" > "rustcrypto-ffi-v${version}-linux-x86_64.tar.gz.sha256")
@@ -164,12 +164,12 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: v${{ steps.version.outputs.version }}
           files: |
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-linux-x86_64.tar.gz.sha256
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-unknown-unknown.tar.gz
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-unknown-unknown.tar.gz.sha256
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-wasip1.tar.gz
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-wasip1.tar.gz.sha256
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-linux-x86_64.tar.gz.sha256
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-unknown-unknown.tar.gz
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-unknown-unknown.tar.gz.sha256
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-wasip1.tar.gz
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-wasm32-wasip1.tar.gz.sha256
           generate_release_notes: true
 
   build-release-macos-arm64:
@@ -210,24 +210,24 @@ jobs:
 
       - name: Run Rust tests
         run: |
-          cd src/rustcrypto-ffi
+          cd rustcrypto-ffi
           cargo test
 
       # wasm/wasi（blst の C ビルド）は Linux ジョブで生成する。macOS の clang は wasm32-unknown-unknown 非対応。
       - name: Build Rust static library (Apple Silicon)
         run: |
-          cd src/rustcrypto-ffi
+          cd rustcrypto-ffi
           cargo build --release --lib
           test -s target/release/librust_crypto_ffi.a
 
       - name: Sync Rust static library to Nim vendor tree
         run: |
-          cd src/nim-rustcrypto
+          cd "$GITHUB_WORKSPACE"
           nim r --hints:off --warnings:off src/rustcrypto/tools/sync_local_rustcrypto_ffi.nim
 
       - name: Run Nim tests
         run: |
-          cd src/nim-rustcrypto
+          cd "$GITHUB_WORKSPACE"
           nimble test -y
 
       - name: Verify Nimble consumer install (macOS arm64)
@@ -235,7 +235,7 @@ jobs:
         run: |
           set -eu
           consumer_dir="$(mktemp -d)"
-          package_dir="$PWD/src/nim-rustcrypto"
+          package_dir="$GITHUB_WORKSPACE"
           export NIMBLE_DIR="$consumer_dir/.nimble"
           mkdir -p "$consumer_dir/app"
           cd "$consumer_dir/app"
@@ -263,9 +263,9 @@ jobs:
         shell: bash
         run: |
           version="${{ steps.version.outputs.version }}"
-          archive_dir="src/rustcrypto-ffi/dist"
+          archive_dir="rustcrypto-ffi/dist"
           mkdir -p "$archive_dir/rustcrypto-ffi/macos-arm64"
-          cp src/rustcrypto-ffi/target/release/librust_crypto_ffi.a \
+          cp rustcrypto-ffi/target/release/librust_crypto_ffi.a \
             "$archive_dir/rustcrypto-ffi/macos-arm64/librust_crypto_ffi-macos-arm64.a"
           tar -C "$archive_dir" -czf "$archive_dir/rustcrypto-ffi-v${version}-macos-arm64.tar.gz" rustcrypto-ffi/macos-arm64
           (cd "$archive_dir" && shasum -a 256 "rustcrypto-ffi-v${version}-macos-arm64.tar.gz" > "rustcrypto-ffi-v${version}-macos-arm64.tar.gz.sha256")
@@ -277,6 +277,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: v${{ steps.version.outputs.version }}
           files: |
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-macos-arm64.tar.gz
-            src/rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+            rustcrypto-ffi/dist/rustcrypto-ffi-v${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
           generate_release_notes: false

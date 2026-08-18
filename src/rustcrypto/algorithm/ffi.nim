@@ -21,13 +21,13 @@ const rustCryptoStaticLib* = staticExec(
 
 when rustCryptoStaticLib.len == 0:
   when defined(linux) and defined(amd64):
-    {.error: "rustcrypto FFI static archive is not available for Linux x86_64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application/src/nim-rustcrypto`.".}
+    {.error: "rustcrypto FFI static archive is not available for Linux x86_64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`.".}
   elif defined(macosx) and defined(arm64):
-    {.error: "rustcrypto FFI static archive is not available for macOS arm64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application/src/nim-rustcrypto`, or place the macos-arm64 vendor/cache archive before compiling.".}
+    {.error: "rustcrypto FFI static archive is not available for macOS arm64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`, or place the macos-arm64 vendor/cache archive before compiling.".}
   elif defined(wasi) or defined(rustcryptoWasi):
-    {.error: "rustcrypto FFI static archive is not available for wasm32-wasip1. Run `nimble fetchRustFfi` from `/application/src/nim-rustcrypto`, or place the wasm32-wasip1 vendor/cache archive before compiling.".}
+    {.error: "rustcrypto FFI static archive is not available for wasm32-wasip1. Run `nimble fetchRustFfi` from `/application`, or place the wasm32-wasip1 vendor/cache archive before compiling.".}
   elif defined(wasm32):
-    {.error: "rustcrypto FFI static archive is not available for wasm32-unknown-unknown. Run `nimble fetchRustFfi` from `/application/src/nim-rustcrypto`, or place the vendor/cache archive before compiling.".}
+    {.error: "rustcrypto FFI static archive is not available for wasm32-unknown-unknown. Run `nimble fetchRustFfi` from `/application`, or place the vendor/cache archive before compiling.".}
 
 {.passL: rustCryptoStaticLib.}
 

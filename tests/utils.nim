@@ -41,7 +41,7 @@ proc basePointSecretKey*(): Secp256k1SecretKey =
   result[Secp256k1SecretKeyLen - 1] = 1
 
 const
-  Rsa2048PrivateKeyDerFixture* = staticRead("../../rustcrypto-ffi/tests/fixtures/rsa2048-private-key.der")
-  Rsa2048PublicKeyDerFixture* = staticRead("../../rustcrypto-ffi/tests/fixtures/rsa2048-public-key.der")
-  Rsa2048CertDerFixture* = staticRead("../../rustcrypto-ffi/tests/fixtures/rsa2048-cert.der")
-  Rsa2048CertPemFixture* = staticRead("../../rustcrypto-ffi/tests/fixtures/rsa2048-cert.pem")
+  Rsa2048PrivateKeyDerFixture* = staticRead("../rustcrypto-ffi/tests/fixtures/rsa2048-private-key.der")
+  Rsa2048PublicKeyDerFixture* = staticRead("../rustcrypto-ffi/tests/fixtures/rsa2048-public-key.der")
+  Rsa2048CertDerFixture* = staticRead("../rustcrypto-ffi/tests/fixtures/rsa2048-cert.der")
+  Rsa2048CertPemFixture* = staticRead("../rustcrypto-ffi/tests/fixtures/rsa2048-cert.pem")
