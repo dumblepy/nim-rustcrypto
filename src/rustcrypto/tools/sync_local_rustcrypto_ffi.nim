@@ -51,7 +51,7 @@ when defined(linux) and defined(amd64):
 
   let resolvedPackageRoot = packageRoot(currentSourcePath)
   let version = versionFromNimble(resolvedPackageRoot)
-  let sourceRoot = resolvedPackageRoot.parentDir
+  let sourceRoot = resolvedPackageRoot
 
   let linuxSourceArchive = pickExistingArchive(sourceArchiveCandidates(sourceRoot, RustCryptoTargetId))
   if linuxSourceArchive.len == 0:
@@ -116,13 +116,13 @@ elif defined(macosx) and defined(arm64):
 
   let resolvedPackageRoot = packageRoot(currentSourcePath)
   let version = versionFromNimble(resolvedPackageRoot)
-  let sourceRoot = resolvedPackageRoot.parentDir
+  let sourceRoot = resolvedPackageRoot
 
   let macosSourceArchive = pickExistingArchive(sourceArchiveCandidates(sourceRoot, RustCryptoMacosArm64TargetId))
   if macosSourceArchive.len == 0:
     stderr.writeLine(
       "rustcrypto FFI macOS arm64 archive not found. Build with `cargo build --release --lib` " &
-      "or `cargo build --release --lib --target " & RustCryptoMacosArm64CargoTriple & "` under src/rustcrypto-ffi.",
+      "or `cargo build --release --lib --target " & RustCryptoMacosArm64CargoTriple & "` under rustcrypto-ffi.",
     )
     quit(QuitFailure)
 

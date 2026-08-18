@@ -12,13 +12,13 @@ Hashing (SHA-256, SHA3-256, Keccak-256, BLAKE2), HMAC, HKDF, PBKDF2, scrypt, Arg
 ## Installation
 
 ```sh
-nimble add "https://github.com/itsumura-h/nim-rustcrypto?subdir=src/nim-rustcrypto"
+nimble add "https://github.com/itsumura-h/nim-rustcrypto"
 ```
 
 Or in your `.nimble` file:
 
 ```nim
-requires "https://github.com/itsumura-h/nim-rustcrypto?subdir=src/nim-rustcrypto"
+requires "https://github.com/itsumura-h/nim-rustcrypto"
 ```
 
 On Linux x86_64, `nimble add` / `nimble install` automatically downloads and unpacks the Rust FFI static archive from GitHub Release, so normal consumers do not need Rust installed. Use `nimble fetchRustFfi` or `nimble buildRustFfiLocal` only when you need to refresh the archive during development.
@@ -78,7 +78,7 @@ Per-primitive and per-protocol guides (English):
 
 ## Development
 
-Build and test Rust from `src/rustcrypto-ffi`, Nim from `src/nim-rustcrypto` (see project rules for exact commands). On GitHub, CI exercises the Nim test suite with the prebuilt static archive workflow.
+Build and test Rust from `rustcrypto-ffi`, Nim from the repository root (see project rules for exact commands). On GitHub, CI exercises the Nim test suite with the prebuilt static archive workflow.
 
 ## License
 

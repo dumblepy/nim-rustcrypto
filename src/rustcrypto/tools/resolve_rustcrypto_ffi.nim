@@ -59,16 +59,16 @@ proc resolveArchivePath(packageRoot: string; version: string; targetArg: string)
 
 proc missingArchiveHint(targetId: string): string =
   if targetId == RustCryptoWasiTargetId:
-    "Run `nimble fetchRustFfi` from `/application/src/nim-rustcrypto`, " &
+    "Run `nimble fetchRustFfi` from `/application`, " &
     "or copy the wasm32-wasip1 Release asset into vendor/cache before compiling."
   elif targetId == RustCryptoWasmTargetId:
-    "Run `nimble fetchRustFfi` from `/application/src/nim-rustcrypto`, " &
+    "Run `nimble fetchRustFfi` from `/application`, " &
     "or copy the wasm32-unknown-unknown Release asset into vendor/cache before compiling."
   elif targetId == RustCryptoMacosArm64TargetId:
-    "Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application/src/nim-rustcrypto`, " &
+    "Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`, " &
     "or copy the macos-arm64 Release asset into vendor/cache before compiling."
   else:
-    "Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application/src/nim-rustcrypto`."
+    "Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`."
 
 let resolvedPackageRoot = packageRoot(currentSourcePath)
 let version = versionFromNimble(resolvedPackageRoot)

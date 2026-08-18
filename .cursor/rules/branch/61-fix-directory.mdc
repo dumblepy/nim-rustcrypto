@@ -1,0 +1,904 @@
+# nim-rustcrypto ディレクトリ構造変更 設計書
+
+## 進捗
+
+- [x] Nim package と Rust crate を新しいルート構成へ移動
+- [x] local build、sync、test、README、CI の旧パスを更新
+- [x] Rust 142 テスト、`nimble test -y`、`test.sh` を実行して成功
+- [ ] GitHub Actions の release job と repository URL install を実環境で確認
+
+## 1. 目的
+
+現在、Nimble package はリポジトリ直下ではなく `src/nim-rustcrypto/` に配置されている。
+
+```text
+repository/
+├── src/
+│   ├── nim-rustcrypto/
+│   │   ├── rustcrypto.nimble
+│   │   ├── src/
+│   │   │   └── rustcrypto/
+│   │   ├── tests/
+│   │   └── ci/
+│   └── rustcrypto-ffi/
+├── docs/
+├── example/
+└── ...
+```
+
+実際に `rustcrypto.nimble` は `src/nim-rustcrypto/` 配下にあり、Rust FFI crate はその兄弟である `src/rustcrypto-ffi/` に配置されている。
+
+このため、Git repository URL から Nimble package をインストールする場合、現在は次のように `subdir` の指定が必要である。
+
+```sh
+nimble add "<repository-url>?subdir=src/nim-rustcrypto"
+```
+
+本変更ではリポジトリ自体を Nimble package root に変更し、次の形式でインストール可能にする。
+
+```sh
+nimble add "<repository-url>"
+```
+
+`.nimble` の dependency からも同様に、
+
+```nim
+requires "<repository-url>"
+```
+
+だけで利用できる状態を完成条件とする。
+
+Nimble では `?subdir=<path>` は repository 内のサブディレクトリに package が存在する場合の指定であり、package root に `.nimble` ファイルがあれば通常の repository URL からインストールできる。
+
+---
+
+## 2. 設計方針
+
+### 2.1 基本方針
+
+**Nim package をリポジトリ直下へ昇格させる。**
+
+同時に Rust crate を `src/` 配下から切り離し、リポジトリ直下の `rustcrypto-ffi/` に移動する。
+
+変更後は次の構造とする。
+
+```text
+repository/
+├── rustcrypto.nimble
+│
+├── src/
+│   └── rustcrypto/
+│       ├── algorithm/
+│       ├── tools/
+│       └── vendor/
+│
+├── rustcrypto-ffi/
+│   ├── Cargo.toml
+│   ├── Cargo.lock
+│   ├── src/
+│   └── tests/
+│
+├── tests/
+├── ci/
+├── docs/
+├── example/
+├── .github/
+├── docker/
+├── README.md
+├── test.sh
+├── reinstall.sh
+└── compose.yaml
+```
+
+### 2.2 Rust crate も移動する理由
+
+Nim package だけをルートへ移動し、Rust crate を `src/rustcrypto-ffi/` に残す案も技術的には可能である。
+
+ただし、その場合、
+
+```text
+src/
+├── rustcrypto/       # Nim
+└── rustcrypto-ffi/   # Rust
+```
+
+となり、Nimble の source tree に Rust crate が混在する。
+
+現在の `rustcrypto.nimble` は、
+
+```nim
+srcDir      = ""
+paths       = @["src"]
+installDirs = @["src"]
+```
+
+という構成になっている。
+
+この状態で Rust crate を `src/` に残すと、Nimble のインストール対象と Rust source tree の境界を追加設定で制御する必要が生じる。
+
+そこで、
+
+```text
+src/            = Nim package source
+rustcrypto-ffi/ = Rust FFI implementation
+```
+
+という責務分離に変更する。
+
+これにより、今回の変更では `srcDir` / `paths` / `installDirs` の semantics を変更せずに済む。
+
+**ディレクトリ移動と Nimble packaging 設定変更を同時に行わない**ことを基本方針とする。
+
+---
+
+## 3. ディレクトリ移動
+
+### Nim package
+
+```text
+before                                      after
+------------------------------------------------------------------
+src/nim-rustcrypto/rustcrypto.nimble    -> rustcrypto.nimble
+src/nim-rustcrypto/src/rustcrypto/      -> src/rustcrypto/
+src/nim-rustcrypto/tests/               -> tests/
+src/nim-rustcrypto/ci/                  -> ci/
+```
+
+### Rust FFI
+
+```text
+before                       after
+------------------------------------------------
+src/rustcrypto-ffi/       -> rustcrypto-ffi/
+```
+
+### `.gitignore`
+
+`src/nim-rustcrypto/.gitignore` には現在、
+
+```gitignore
+vendor/
+```
+
+が定義されている。
+
+リポジトリルートには既存の `.gitignore` が存在するため、package 側 `.gitignore` をそのまま移動して上書きしてはならない。
+
+ルート `.gitignore` に必要な ignore rule を統合する。
+
+---
+
+## 4. `rustcrypto.nimble` の変更
+
+### 4.1 packaging 設定
+
+次の設定は原則維持する。
+
+```nim
+srcDir      = ""
+paths       = @["src"]
+installDirs = @["src"]
+```
+
+Nim source が新構成でも `src/rustcrypto/` に存在するため、今回ここを変更する必要はない。
+
+`srcDir = "src"` への変更などは別リファクタリングとして扱う。
+
+### 4.2 `fetchRustFfi`
+
+現在、
+
+```nim
+nim r --hints:off --warnings:off src/rustcrypto/tools/fetch_rustcrypto_ffi.nim
+```
+
+を実行している。
+
+変更後もスクリプトの位置は、
+
+```text
+src/rustcrypto/tools/fetch_rustcrypto_ffi.nim
+```
+
+なので変更不要。
+
+### 4.3 `buildRustFfiLocal`
+
+現在は Nim package root から見て Rust crate が `../rustcrypto-ffi` にある前提になっている。
+
+現在:
+
+```nim
+exec "cd ../rustcrypto-ffi && cargo build --release --lib"
+```
+
+変更後:
+
+```nim
+exec "cd rustcrypto-ffi && cargo build --release --lib"
+```
+
+ただし、より堅牢にするなら `cd` 依存を減らして、
+
+```nim
+exec "cargo build --manifest-path rustcrypto-ffi/Cargo.toml --release --lib"
+```
+
+の形式へ変更する。
+
+後者を推奨する。
+
+---
+
+## 5. package root 解決
+
+`rustcrypto_ffi_paths.nim` の `packageRoot()` は、現在の source file から上方向へ走査して `rustcrypto.nimble` を探している。
+
+```nim
+proc packageRoot*(scriptSourcePath: string): string =
+  ...
+  if fileExists(dir / "rustcrypto.nimble"):
+    return dir
+```
+
+新構成では、
+
+```text
+repository/
+├── rustcrypto.nimble
+└── src/rustcrypto/tools/...
+```
+
+となるため、このロジックはそのまま利用できる。
+
+また `moduleRoot()` も、
+
+```nim
+packageRoot / "src" / "rustcrypto"
+```
+
+を優先しているため、新構成と一致する。
+
+したがって `rustcrypto_ffi_paths.nim` の package/module root 解決そのものは変更不要とする。
+
+---
+
+## 6. local Rust FFI sync の変更
+
+`sync_local_rustcrypto_ffi.nim` は現在、
+
+```nim
+let resolvedPackageRoot = packageRoot(currentSourcePath)
+let sourceRoot = resolvedPackageRoot.parentDir
+```
+
+としている。
+
+現構成では、
+
+```text
+resolvedPackageRoot
+= repository/src/nim-rustcrypto
+
+resolvedPackageRoot.parentDir
+= repository/src
+```
+
+なので、
+
+```text
+sourceRoot/rustcrypto-ffi
+```
+
+から Rust crate を見つけられる。
+
+新構成では、
+
+```text
+resolvedPackageRoot
+= repository
+```
+
+になるため、`.parentDir` を使用すると repository の外へ出てしまう。
+
+したがって、
+
+```nim
+let repositoryRoot = resolvedPackageRoot
+```
+
+として、
+
+```text
+repositoryRoot/rustcrypto-ffi/target/...
+```
+
+を参照するよう変更する。
+
+つまり、
+
+```nim
+let sourceRoot = resolvedPackageRoot.parentDir
+```
+
+は削除し、
+
+```nim
+let sourceRoot = resolvedPackageRoot
+```
+
+相当へ変更する。
+
+Linux / macOS の双方に存在する同じ root 解決を変更する。
+
+---
+
+## 7. release fallback build の変更
+
+`fetch_rustcrypto_ffi.nim` には GitHub Release asset が取得できなかった場合、repository を clone して Rust FFI をローカルビルドする fallback がある。
+
+現在は clone 後に、
+
+```nim
+let sourceRoot = sourceCloneDir / "src" / "rustcrypto-ffi"
+```
+
+を参照している。
+
+変更後は、
+
+```nim
+let sourceRoot = sourceCloneDir / "rustcrypto-ffi"
+```
+
+とする。
+
+これは重要な変更であり、更新を忘れると通常の Release asset download は成功しても、fallback build だけが壊れる。
+
+---
+
+## 8. テスト fixture path の変更
+
+現在の `tests/utils.nim` は Rust 側 fixture を、
+
+```nim
+staticRead("../../rustcrypto-ffi/tests/fixtures/...")
+```
+
+で読み込んでいる。
+
+現在は、
+
+```text
+src/nim-rustcrypto/tests/
+          ../../
+src/rustcrypto-ffi/
+```
+
+という位置関係になっている。
+
+変更後は、
+
+```text
+tests/
+../
+rustcrypto-ffi/
+```
+
+なので、
+
+```nim
+staticRead("../rustcrypto-ffi/tests/fixtures/...")
+```
+
+へ変更する。
+
+対象:
+
+```text
+rsa2048-private-key.der
+rsa2048-public-key.der
+rsa2048-cert.der
+rsa2048-cert.pem
+```
+
+---
+
+## 9. `test.sh` の変更
+
+現在は以下のディレクトリを直接参照している。
+
+```sh
+$repo_root/src/rustcrypto-ffi
+$repo_root/src/nim-rustcrypto
+```
+
+変更後:
+
+```sh
+$repo_root/rustcrypto-ffi
+$repo_root
+```
+
+概念上は次の流れになる。
+
+```sh
+repo_root=...
+
+cd "$repo_root/rustcrypto-ffi"
+cargo test
+cargo build ...
+
+cd "$repo_root"
+nim r ... src/rustcrypto/tools/sync_local_rustcrypto_ffi.nim
+
+cd "$repo_root"
+nimble test -y
+
+nim r --path:src ci/rustcrypto_exec_smoke.nim
+```
+
+Nim package のテストを repository root から実行できる状態を標準とする。
+
+---
+
+## 10. `reinstall.sh` の変更
+
+現在は Docker 内で、
+
+```text
+/application/src/rustcrypto-ffi
+/application/src/nim-rustcrypto
+```
+
+を使用している。
+
+変更後:
+
+```text
+/application/rustcrypto-ffi
+/application
+```
+
+とする。
+
+`compose.yaml` はリポジトリ全体を `/application` に mount しているため、volume 設定そのものは変更不要である。
+
+Dockerfile の `WORKDIR /application` も新構成と整合する。
+
+---
+
+## 11. GitHub Actions の変更
+
+`.github/workflows/test.yml` 自体は `test.sh` を repository root から呼び出しているため、主な directory migration は `test.sh` 側で吸収できる。
+
+一方、`.github/workflows/release.yml` には旧 directory layout が多数ハードコードされている。
+
+以下をすべて変更する。
+
+### Rust build
+
+```text
+src/rustcrypto-ffi
+→
+rustcrypto-ffi
+```
+
+### Nim package root
+
+```text
+src/nim-rustcrypto
+→
+.
+```
+
+### vendor tree
+
+```text
+src/nim-rustcrypto/src/rustcrypto/vendor/...
+→
+src/rustcrypto/vendor/...
+```
+
+### consumer test
+
+現在:
+
+```sh
+package_dir="$PWD/src/nim-rustcrypto"
+```
+
+変更後:
+
+```sh
+package_dir="$PWD"
+```
+
+### release staging
+
+現在:
+
+```text
+src/rustcrypto-ffi/dist/
+```
+
+変更後:
+
+```text
+rustcrypto-ffi/dist/
+```
+
+### release assets
+
+GitHub Release upload の file path についても、
+
+```text
+src/rustcrypto-ffi/dist/...
+```
+
+から、
+
+```text
+rustcrypto-ffi/dist/...
+```
+
+へ変更する。
+
+---
+
+## 12. README の変更
+
+Installation を、
+
+```sh
+nimble add "<repository-url>?subdir=src/nim-rustcrypto"
+```
+
+から、
+
+```sh
+nimble add "<repository-url>"
+```
+
+へ変更する。
+
+`.nimble` の例も、
+
+```nim
+requires "<repository-url>"
+```
+
+へ変更する。
+
+Development セクションも現在の、
+
+```text
+Rust: src/rustcrypto-ffi
+Nim:  src/nim-rustcrypto
+```
+
+から、
+
+```text
+Rust: rustcrypto-ffi
+Nim:  repository root
+```
+
+へ変更する。現在 README には旧構成が明記されている。
+
+なお、現在 README の install URL は `itsumura-h/nim-rustcrypto` を参照している一方、今回確認している repository は `dumblepy/nim-rustcrypto` である。
+
+**repository owner / canonical URL の変更は今回の directory migration とは分離する。**
+
+今回の変更では原則、
+
+```text
+?subdir=src/nim-rustcrypto
+```
+
+の除去だけを行い、canonical repository の変更は別判断とする。
+
+---
+
+## 13. プロジェクトルールの更新
+
+現在の `.cursor/rules/project.mdc` ではビルドディレクトリとして、
+
+```text
+/application/src/rustcrypto-ffi
+/application/src/nim-rustcrypto
+```
+
+が MUST rule として定義されている。
+
+新構成では、
+
+```text
+/application/rustcrypto-ffi
+/application
+```
+
+へ更新する必要がある。
+
+特に以下を変更する。
+
+```text
+SYW-BUILD-002
+SYW-BUILD-003
+```
+
+`branch/` 配下の過去タスク文書にも旧パスが存在するが、それらが履歴資料である場合は機械的に書き換えない。
+
+alwaysApply の `project.mdc`、README、CI、shell script、実行コードなど、**現在の build/install behavior に影響するファイルを更新対象**とする。
+
+---
+
+## 14. 互換性
+
+### 公開 Nim API
+
+変更しない。
+
+```nim
+import rustcrypto/algorithm/sha256
+```
+
+などの import path は維持する。
+
+### Rust FFI ABI
+
+変更しない。
+
+Rust crate の filesystem 上の位置だけを変更し、公開 symbol、ABI、archive 名は変更しない。
+
+### vendor archive
+
+次の構造は維持する。
+
+```text
+src/rustcrypto/vendor/rustcrypto-ffi/
+├── linux-x86_64/
+├── macos-arm64/
+├── wasm32-unknown-unknown/
+└── wasm32-wasip1/
+```
+
+`moduleRoot()` が `src/rustcrypto` を解決する既存設計を利用する。
+
+### GitHub Release asset 名
+
+変更しない。
+
+例えば、
+
+```text
+rustcrypto-ffi-v<version>-linux-x86_64.tar.gz
+```
+
+などの asset naming は directory layout と独立しているため、そのままとする。現在の download logic もこの naming を前提としている。
+
+つまり、この変更は **repository layout migration であり package protocol / ABI migration ではない**。
+
+---
+
+## 15. 実装順序
+
+### Phase 1: ファイル移動
+
+1. `rustcrypto.nimble` を repository root へ移動
+2. Nim module tree を `src/rustcrypto/` へ移動
+3. `tests/` を root へ移動
+4. `ci/` を root へ移動
+5. Rust crate を `rustcrypto-ffi/` へ移動
+6. package `.gitignore` の内容を root `.gitignore` に統合
+7. 空になった `src/nim-rustcrypto/` を削除
+
+### Phase 2: path resolution 修正
+
+1. `rustcrypto.nimble`
+2. `sync_local_rustcrypto_ffi.nim`
+3. `fetch_rustcrypto_ffi.nim`
+4. `tests/utils.nim`
+
+### Phase 3: build tooling 修正
+
+1. `test.sh`
+2. `reinstall.sh`
+3. `.github/workflows/release.yml`
+4. 必要に応じてその他 shell/build script
+
+### Phase 4: documentation / rules
+
+1. `README.md`
+2. `.cursor/rules/project.mdc`
+3. その他、現行 build 手順を説明する文書
+
+---
+
+## 16. テスト方針
+
+### 16.1 Rust
+
+repository root から、
+
+```sh
+cd rustcrypto-ffi
+cargo test
+cargo build --release --lib
+```
+
+が成功すること。
+
+Linux では既存どおり、
+
+```sh
+cargo build --release --lib --target wasm32-unknown-unknown
+cargo build --release --lib --target wasm32-wasip1
+```
+
+も成功すること。
+
+### 16.2 Nim
+
+repository root で、
+
+```sh
+nimble test -y
+```
+
+が成功すること。
+
+### 16.3 local archive sync
+
+```sh
+nim r --hints:off --warnings:off \
+  src/rustcrypto/tools/sync_local_rustcrypto_ffi.nim
+```
+
+を repository root から実行し、
+
+```text
+src/rustcrypto/vendor/rustcrypto-ffi/...
+```
+
+へ archive が配置されること。
+
+### 16.4 local install
+
+repository root で、
+
+```sh
+nimble install -y
+```
+
+が成功すること。
+
+### 16.5 Git repository URL install
+
+最重要 acceptance test として、空の `NIMBLE_DIR` を使用し、
+
+```sh
+nimble install -y "<repository-url>"
+```
+
+が成功すること。
+
+**このテストでは `?subdir=` を絶対に付けない。**
+
+その後、別 consumer project から、
+
+```nim
+import rustcrypto/algorithm/sha256
+
+doAssert sha256Hex("abc") ==
+  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+```
+
+を compile + execute する。
+
+現在の release workflow にも consumer project を生成してインストール後の import/link を確認するテストがあるため、これを repository URL install の検証まで拡張する。
+
+---
+
+## 17. Acceptance Criteria
+
+以下をすべて満たした時点で完了とする。
+
+* [ ] `rustcrypto.nimble` が repository root に存在する
+* [ ] Nim module が `src/rustcrypto/` に存在する
+* [ ] Rust crate が `rustcrypto-ffi/` に存在する
+* [ ] `src/nim-rustcrypto/` が存在しない
+* [ ] `src/rustcrypto-ffi/` が存在しない
+* [ ] `nimble test -y` を repository root で実行できる
+* [ ] `cargo test` を `rustcrypto-ffi/` で実行できる
+* [ ] local FFI sync が成功する
+* [ ] GitHub Release FFI download が成功する
+* [ ] fallback local Rust build が新しい path を使用する
+* [ ] Linux x86_64 consumer install test が成功する
+* [ ] macOS arm64 consumer install test が成功する
+* [ ] wasm / WASI archive の配置が変わらない
+* [ ] `nimble install "<repository-url>"` が成功する
+* [ ] `nimble add "<repository-url>"` が成功する
+* [ ] install URL に `?subdir=` が不要
+* [ ] 公開 Nim import path が変わらない
+* [ ] Rust FFI ABI が変わらない
+
+---
+
+## 18. 旧パス残存チェック
+
+実装完了時に旧構造への参照を検索する。
+
+対象文字列:
+
+```text
+src/nim-rustcrypto
+src/rustcrypto-ffi
+../rustcrypto-ffi
+?subdir=src/nim-rustcrypto
+/application/src/nim-rustcrypto
+/application/src/rustcrypto-ffi
+```
+
+実行コード、CI、README、always-active project rules にこれらが残っていないことを確認する。
+
+`.cursor/rules/branch/` の過去設計資料など、意図的に履歴として残すものについては例外として扱う。
+
+---
+
+## 19. リスク
+
+### Risk 1: `sync_local_rustcrypto_ffi.nim` の `.parentDir`
+
+最も見落としやすい箇所。
+
+package root が repository root に変わるため、現在の `.parentDir` は repository 外を指す。
+
+**対策:** package root と repository root を同一として扱う。
+
+### Risk 2: fallback build
+
+通常は GitHub Release asset が取得できるため、
+
+```text
+sourceCloneDir/src/rustcrypto-ffi
+```
+
+という古い path が壊れていても発覚しにくい。
+
+**対策:** fallback build の path も明示的にテストする。
+
+### Risk 3: fixture path
+
+`staticRead()` は compile-time に評価されるため、fixture の相対パスがずれると Nim test compile 時点で失敗する。現在の fixture は Rust crate の tests を直接参照している。
+
+**対策:** `../../rustcrypto-ffi` → `../rustcrypto-ffi` を同一変更で行う。
+
+### Risk 4: Release workflow
+
+release workflow には build、vendor copy、consumer test、archive staging、upload の各段階で旧 path が使用されている。
+
+一部だけ更新すると通常 CI は通っても release 時に失敗する可能性がある。
+
+**対策:** release workflow を一つの migration unit として更新する。
+
+---
+
+## 20. 非対象
+
+今回の変更では以下を行わない。
+
+* Nim 公開 API の変更
+* Rust FFI API / ABI の変更
+* package 名 `rustcrypto` の変更
+* versioning policy の変更
+* Release asset naming の変更
+* RustCrypto dependency version の更新
+* `srcDir` の設計変更
+* repository owner / canonical repository URL の変更
+
+目的はあくまで、
+
+> **repository root = Nimble package root**
+
+という状態を作り、`?subdir=src/nim-rustcrypto` を不要にすることである。

@@ -124,7 +124,7 @@ else:
       if not runCommand("git clone --depth 1 " & quoteShell(sourceRepoUrl) & " " & quoteShell(sourceCloneDir)).success:
         return false
 
-      let sourceRoot = sourceCloneDir / "src" / "rustcrypto-ffi"
+      let sourceRoot = sourceCloneDir / "rustcrypto-ffi"
       if not runCommand("cargo build --release --lib", sourceRoot).success:
         return false
 
