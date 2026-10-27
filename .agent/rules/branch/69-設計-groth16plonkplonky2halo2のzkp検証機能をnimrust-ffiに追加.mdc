@@ -1,0 +1,332 @@
+# 設計書：汎用ゼロ知識証明機能の追加（Groth16 / PLONK / Plonky2 / Halo2）
+
+## 1. 目的
+
+`nim-rustcrypto` に、**汎用的なゼロ知識証明（Zero-Knowledge Proof; ZKP）を扱う暗号API**を追加する。
+
+初期段階では、**BN254有限体・楕円曲線、Poseidonハッシュ、Groth16検証（Verifier）**を提供し、NimアプリケーションがRust実装をFFI経由で安全に利用できるようにする。ネイティブ環境に加え、既存のWebAssemblyターゲットでのビルド・動作も検証する。
+
+拡張フェーズで**PLONK/BN254**、**Plonky2/Goldilocks/FRI**、**Halo2**の各Verifierも実装する。**Groth16・PLONK・Plonky2・Halo2の4方式を本Issueの実装対象**とする。Plonky3/WHIRは将来の調査課題に留める。各方式はproof/VK/検証アルゴリズムに互換性がないため個別にサポートする。
+
+**Halo2は一種類の証明形式ではない**。Zcash実装のIPA/Pastaと、PSE系のKZG/BN254などは相互互換でない。Halo2の対象実装・PCS・曲線・transcript・バージョンは実装着手前に固定する。
+
+目的は暗号プリミティブと証明検証APIの追加であり、特定のアプリケーション、プロトコル、取引モデルには依存しない。
+
+> **スコープの区別**：まずGroth16の証明**検証**を実装し、PLONK、Plonky2、Halo2へ段階拡張する。4方式すべてのVerifierを完了条件とする。証明**生成（Prover）**は独立した設計・別段階の対象であり、Verifierだけで「ZKP生成が可能」とは表現しない。
+
+## 2. 既存アーキテクチャと制約
+
+現行の構成：
+- `rustcrypto-ffi/Cargo.toml` — Rust 2024、`staticlib`、暗号依存ライブラリ。
+- `rustcrypto-ffi/src/lib.rs` — C ABIエラーコードと公開関数。
+- `src/rustcrypto/algorithm/ffi.nim` — C ABI宣言と静的ライブラリのリンク。
+- `src/rustcrypto/algorithm/bls.nim` / `rustcrypto-ffi/src/bls.rs` — BLS12-381の演算・Pairing API。**BN254とは別曲線**なのでGroth16/BN254を既存のBLS APIへ混在させない。
+- `src/rustcrypto/algorithm/common.nim` — 共通バッファ・エラー処理。
+- `test.sh`、`.github/workflows/test.yml`、`.github/workflows/release.yml` — テストおよびLinux x86_64 / macOS arm64 / wasm32-unknown-unknown / wasm32-wasip1配布経路。
+
+`.cursor/rules/project.mdc` の方針に従う：
+1. FFIはC ABI互換型のみ公開（Rustの参照、Vec、Resultは公開しない）。
+2. RustのpanicをFFI境界から漏らさない。
+3. バッファの所有権は呼び出し側（Nim側）。
+4. Nimの公開APIはmarker type + type-first形式に統一。
+5. RustとNimのテスト駆動開発、既知の相互運用テストベクトル必須。
+6. 既存APIとの互換性を維持する。
+
+## 3. 採用候補技術
+
+| 機能 | 候補 | 用途 |
+|---|---|---|
+| 有限体・曲線 | `ark-bn254`, `ark-ff`, `ark-ec` | BN254 Fr/Fq、G1/G2、Pairing |
+| Groth16 | `ark-groth16`, `ark-serialize` | 証明と検証鍵の読み込み、検証 |
+| PLONK/BN254 | 対象PLONK実装に互換なRust verifier（gnark相互運用を評価） | KZG系proofと検証鍵の検証 |
+| Plonky2 | Polygon Zero Plonky2または互換フォーク（commit固定） | Goldilocks/FRI proof検証 |
+| Halo2 | Zcash `halo2_proofs`（IPA/Pasta）またはPSE系（KZG/BN254） | 選定したHalo2プロファイルのproof検証 |
+| Poseidon | `light-poseidon` または互換性検証済みの実装 | ZK回路向けフィールドハッシュ |
+| 外部相互運用 | Circom / snarkjs | 検証用フィクスチャ、Proof・VK形式変換 |
+
+- arkworksの各crateは**相互互換のある同一バージョン系列**で統一する。例として `light-poseidon` のarkworks依存バージョンに注意する。
+- 採用前にライセンス・保守状況・脆弱性・依存数・Wasmビルド可否を記録し、`Cargo.lock` に固定する。
+- 既存のBLS12-381バックエンド `blst` をBN254エンジンだと誤認しない。
+- 採用する暗号ライブラリ・APIが監査済みであるとは仮定しない。
+- 各方式でproof wire format、曲線、PCS、トランスクリプト、バージョンを明確化し、検証方式の混同を防ぐ。Plonky2やHalo2が異なるRustツールチェーンを要求する場合、optional feature・独立アーカイブ・CI分離を検討する。
+
+## 4. 公開API設計案
+
+### 4.1 BN254
+
+想定ファイル：
+- `rustcrypto-ffi/src/bn254.rs`
+- `src/rustcrypto/algorithm/bn254.nim`
+- `tests/algorithm/test_bn254.nim`
+- `docs/bn254.md`
+
+Nim API概念例（具体的な型・シリアライズ仕様は実装前に確定）：
+
+```nim
+type
+  Bn254* = object
+  Bn254Fr* = array[32, byte]
+
+proc isCanonicalFr*(T: type Bn254; input: Bn254Fr): bool
+```
+
+- Fr/Fqの区別を明確にし、フィールド要素は**正規表現のみ**を受け付ける。
+- 入出力バイト順・modulus・境界条件を文書化する。入力の黙示的なmodulus縮約は禁止。
+- 公開が必要なG1/G2は有効点チェック（on-curve、subgroup、point-at-infinity規則）を必須とする。
+- 生の曲線APIをむやみに増やさず、必要最小限の型付きプリミティブから提供する。
+
+### 4.2 Poseidon
+
+想定ファイル：
+- `rustcrypto-ffi/src/poseidon.rs`
+- `src/rustcrypto/algorithm/poseidon.nim`
+- `tests/algorithm/test_poseidon.nim`
+- `docs/poseidon-bn254.md`
+
+```nim
+type PoseidonBn254* = object
+
+proc hash*(T: type PoseidonBn254; inputs: openArray[Bn254Fr]): Bn254Fr
+```
+
+- **BN254 Fr、arity、round数、S-box、定数表、parameter version、エンコーディング**を固定し、APIの互換性条件として明記。
+- Poseidonのパラメータの異なる実装を同名ハッシュとして扱わない。必要なら異なる名前・バージョンを使用。
+- Circomなど独立実装との既知ベクトルで一致検証する。
+- 入力数の上下限、異常長、非正規要素を拒否する。
+- ドメイン分離は汎用的な利用者向けガイダンスを記述し、アプリケーション固有の用途をこのライブラリに組み込まない。
+
+### 4.3 Groth16/BN254 Verifier
+
+想定ファイル：
+- `rustcrypto-ffi/src/groth16.rs`
+- `src/rustcrypto/algorithm/groth16.nim`
+- `tests/algorithm/test_groth16.nim`
+- `docs/groth16-bn254.md`
+
+```nim
+type Groth16Bn254* = object
+
+proc verify*(
+  T: type Groth16Bn254;
+  verifyingKey: openArray[byte];
+  proof: openArray[byte];
+  publicInputs: openArray[Bn254Fr]
+): bool
+```
+
+要件：
+- Proof（A/B/C）、Verifying Key、public inputの**バイナリ形式v1**を厳密に定義。byte order、圧縮方式、配列長、末尾余剰データの可否を明示。
+- `ark-serialize`形式を内部基準として評価し、Circom/snarkjs等のJSON/バイナリ形式とは**必要な変換を明示**する（無条件のバイト互換は保証しない）。
+- Proof/VK中の曲線点について、正規性・on-curve・subgroup・infinity制約を確認。公開入力はFrの正規形式と個数を確認。
+- 検証鍵はProofと数学的に結び付き、証明のpublic inputsは指定の順番で完全に検証する。不正な形式をfail-closedで拒否。
+- `false` は構造的に有効だが検証不成立の場合に返し、フォーマット・サイズ・FFI引数不正は明確なエラーとして扱う。
+- 任意のVerifying Keyでの検証が「アプリケーションとして承認された命題の証明」を意味するわけではないことをドキュメントに明記する。承認済み回路/VKの固定・バージョン管理は利用側が行う。
+- 不正入力でpanic・UB・想定外のメモリ確保が起きないよう上限を設ける。
+
+### 4.4 PLONK/BN254 Verifier（追加スコープ）
+
+想定ファイル：
+- `rustcrypto-ffi/src/plonk_bn254.rs`
+- `src/rustcrypto/algorithm/plonk.nim`
+- `tests/algorithm/test_plonk.nim`
+- `docs/plonk-bn254.md`
+
+概念API：
+
+```nim
+type PlonkBn254* = object
+
+proc verify*(
+  T: type PlonkBn254;
+  verifyingKey: openArray[byte];
+  proof: openArray[byte];
+  publicInputs: openArray[Bn254Fr]
+): bool
+```
+
+- **PLONKはGroth16とは別の証明方式**。BN254/Pairingが共通でも検証アルゴリズムは流用できない。
+- 最初に**互換対象を厳密に特定する**。特にGo製 `gnark` のPLONK proof/VKは一般的な「PLONK」形式とのバイト互換を仮定しない。KZG・Fiat–Shamir transcript・ハッシュ・public witness・コミットメント形式・チャレンジ順序・proof serialization・プロトコルバージョンを固定する。
+- Rustで利用できる既存Verifier実装の形式互換性を調査し、無理に別実装のproofを変換して検証できるとみなさない。完全互換が得られない場合は互換レイヤーか明確にバージョン指定された実装を別途設計する。
+- gnarkから作成した**既知の正しいproof/VK/public witnessのfixture**で検証成功し、改変proof、誤VK、誤public input、形式/byte order不一致で確実に失敗することを検証する。
+- Trusted Setup/SRSの取り扱い、検証鍵の正当性、proofに結び付くpublic inputの順序および多項式コミットメントの形式を文書化する。
+- FFIや高水準APIでは任意長入力に上限を設け、Nim側への公開形式をバージョン管理する。
+
+### 4.5 Plonky2 / Goldilocks / FRI Verifier（追加スコープ）
+
+想定ファイル：
+- `rustcrypto-ffi/src/plonky2.rs`
+- `src/rustcrypto/algorithm/plonky2.nim`
+- `tests/algorithm/test_plonky2.nim`
+- `docs/plonky2.md`
+
+概念API：
+
+```nim
+type Plonky2Goldilocks* = object
+
+proc verify*(
+  T: type Plonky2Goldilocks;
+  proofWithPublicInputs: openArray[byte];
+  verifierOnlyCircuitData: openArray[byte];
+  commonCircuitData: openArray[byte]
+): bool
+```
+
+- Plonky2は通常 **Goldilocks field、FRI多項式検査、Poseidonハッシュ、再帰的な証明**を使用する。**BN254/Groth16 Verifierとは別実装**であり、BN254向けPoseidonパラメータともハッシュ互換ではない。
+- バージョン・設定が違うPlonky2のproofは互換でない可能性がある。まずfork/commit、`D`、`FriConfig`、hash config、circuit dataのシリアライズ方式を固定する。
+- `ProofWithPublicInputs`と、それに対応する`VerifierOnlyCircuitData`/`CommonCircuitData`を扱う。単にproofのbytesだけを渡して汎用検証できると仮定しない。
+- Goldilocks（64bit）フィールド、FRI challenge、Merkle cap、commitment hash、Merkle path、public input、回路構成の検証を既存の実装に委譲しつつ、FFI境界の正規性・サイズ上限・無制限メモリ確保を検査する。
+- Proof/VK相当の検証データは明示的なversionを持たせ、**事前承認済み回路に紐付ける必要がある場合は利用側で固定**する。
+- Rustの`plonky2`等はnightly Rust・メモリ・実装依存に注意する。既存のstable Rustと全ターゲットのCIを破壊しないよう、**独立featureまたは別アーカイブ**構成を評価する。
+- 最初は「外部生成されたPlonky2 proofの検証」に絞る。FRI/recursive proofの性能、Wasm互換性、メモリ、命令数を測定し、環境制約を満たさなければ対象ターゲットから除外するか実装を再設計する。
+- Plonky2からBN254/PLONKへラップされたproofは**Plonky2 proofと同じ形式ではない**。対応するPLONK Verifierで検証し、元のproofとの結合条件はwrapperの回路と検証鍵で担保する。
+
+### 4.6 Halo2 Verifier（追加スコープ・必須）
+
+想定ファイル：
+- `rustcrypto-ffi/src/halo2.rs`
+- `src/rustcrypto/algorithm/halo2.nim`
+- `tests/algorithm/test_halo2.nim`
+- `docs/halo2.md`
+
+#### 対応プロファイルの選定
+
+| 候補 | 多項式コミットメント（PCS）・曲線 | 注意点 |
+|---|---|---|
+| Zcash `halo2_proofs` | IPA / Pasta | KZG用SRSは不要。Zcash系のproof・VK形式に準拠 |
+| PSE系Halo2 | KZG / BN254（SHPLONK等を含む） | SRS、Fiat–Shamir transcript、proof形式がIPA方式と異なる |
+
+- [ ] Phase 0相当の事前調査で、**初期対応プロファイルを少なくとも1種類**明確に選定し、採用実装・git commit・曲線・PCS・hash/transcript・設定・シリアライズを固定する。第一候補はZcash `halo2_proofs`（IPA/Pasta）。後からKZG/BN254を追加する場合は別プロファイルにする。
+- [ ] 同じ名称のHalo2でも、異なるフォークのproofやVerifier Keyを無条件に受理しない。
+- [ ] パラメータ（params）、VK、proof、公開インスタンスの**規範的なwire format**・上限・正規性・列順・バージョンを仕様化する。
+- [ ] 受理するproofとparams/VKの組を結び付け、公開インスタンスの順序と数を正確に検証する。信頼済み回路/VKの許可判断は利用側の責務とする。
+- [ ] Rust実装・Nim wrapperで不正proof、誤VK、異なるparams、異なるpublic instances、不正curve point、短すぎる/過大な入力をfail-closedで拒否する。
+- [ ] `halo2_proofs`のMSRV・並列処理機能・Wasm上でのアロケータとスレッド制約を調べる。Verifierのみの実行ではOS由来の乱数を必要としない構成とする。
+- [ ] Native・Wasmで同じfixturesを実行し、検証時間・メモリ・Wasm命令数・生成物サイズを測定する。非対応ターゲットを明示する。
+- [ ] Halo2を一般的なPLONK/BN254のVerifier APIに統合しない。**`Halo2IpaPasta`等のプロファイル名を含むmarker type**を公開する。
+
+概念API（wire format確定後に見直す）：
+
+```nim
+type Halo2IpaPasta* = object
+
+proc verify*(
+  T: type Halo2IpaPasta;
+  params: openArray[byte];
+  verifyingKey: openArray[byte];
+  proof: openArray[byte];
+  publicInstances: openArray[byte]
+): bool
+```
+
+### 4.7 FFIの規約
+
+- Cシンボル接頭辞：`rustcrypto_bn254_*` / `rustcrypto_poseidon_bn254_*` / `rustcrypto_groth16_bn254_*` / `rustcrypto_plonk_bn254_*` / `rustcrypto_plonky2_*` / `rustcrypto_halo2_<profile>_*`。**4方式の検証APIは形式・型・シンボルを分離**する。
+- 引数はポインタ・バイト長・固定長整数、結果は`c_int`のステータスと呼び出し側所有の出力バッファに限定。
+- エラー：不正入力、長さ違反、不正点、不正フィールド要素、証明検証不成立、内部失敗を区別し、既存コード体系と整合させる。
+- NULL + 非ゼロ長は拒否。すべての入力と出力にサイズ上限・境界検証を行う。
+- 関数終了後にRustメモリの所有権をNimへ渡さない。高水準Nim APIはポインタやC ABIを利用者へ露出させない。
+
+## 5. 段階的な実装計画
+
+### Phase 0 — 実現性・互換性の事前検証
+
+- [ ] 候補crateの組み合わせを決め、Linux x86_64でRustの小規模Groth16検証fixtureを実行する。
+- [ ] `wasm32-unknown-unknown` / `wasm32-wasip1`向けRust `staticlib`をビルドする。
+- [ ] NimからFFI経由で既知のGroth16 proofを検証し、ネイティブ・Wasmで動作確認する。
+- [ ] 対象Wasmランタイムに応じた命令数・メモリ・モジュールサイズ・実行時間を測定する。**クロスビルド成功のみを機能動作の証拠としない**。
+- [ ] 非互換・性能不足の場合はバックエンドや方式を再評価し、APIを固定しない。
+
+### Phase 1 — BN254 / Poseidon
+
+- [ ] RustのBN254/Poseidon実装、C ABI、Nim API、単体テストを追加。
+- [ ] field表現、ハッシュパラメータ、相互運用ベクトルを文書化。
+- [ ] 不正入力・境界値・panic防止のテストを導入。
+
+### Phase 2 — Groth16 Verifier
+
+- [ ] Rust検証処理、FFI、Nim APIとシリアライズ仕様を実装。
+- [ ] 独立した証明生成ツール由来のProof/VKで相互運用テスト。
+- [ ] 不正Proof、入力改変、誤VK、点の不正エンコーディング等の負テスト。
+- [ ] 性能・サイズ・メモリ利用量の基準値を確定。
+
+### Phase 3 — 統合・配布
+
+- [ ] `rustcrypto-ffi/src/lib.rs`、`src/rustcrypto/algorithm/ffi.nim`、`src/rustcrypto.nim`に統合。
+- [ ] `test.sh`、GitHub Actions、配布アーカイブの各サポートターゲットで検証。
+- [ ] BLSを含む既存API・テストとの後方互換を確認。
+- [ ] ライセンス・依存ライブラリ一覧・セキュリティ注意事項・利用例をドキュメント化。
+
+### Phase 4 — PLONK/BN254の相互運用対応
+
+- [ ] 互換対象となるPLONK実装・proof/VK形式・hash transcript・SRS前提を決定する。
+- [ ] Rust実装とC ABI/Nim高水準Verifierを追加する。必要なcrateを既存依存系列と共存できるよう固定。
+- [ ] 独立したPLONK prover（特にgnark）から出力したfixtureでネイティブ・Nim FFI・Wasmの検証一致を確認する。
+- [ ] 検証失敗、public input変更、VK不一致、破損データ、不正点・不正長を全て拒否し、メモリ・命令数を実測する。
+
+### Phase 5 — Plonky2/Goldilocks/FRIの対応
+
+- [ ] 対象Plonky2版、シリアライズ、hash、FRI設定、proof/verifier dataを固定する。
+- [ ] Rustでverifyのみを呼べる最小モジュールを構築し、Nimのmarker type APIを提供する。
+- [ ] 正常proofと改変proofのfixtures、異なるcommon circuit dataやpublic inputsの負テストを追加する。
+- [ ] stable Rust依存群とのビルド衝突・nightly要件を吸収する構成（feature分離、独立アーカイブ、またはビルドターゲット別）を決定する。
+- [ ] Wasmターゲットで証明検証を**実行**して測定する。高コスト・大メモリ・非対応なら対応範囲を明示し、利用可能と偽らない。
+
+### Phase 6 — Halo2 Verifier対応（必須）
+
+- [ ] 互換対象の実装、リビジョン、IPA/KZG、曲線、transcript、params/VK/proof形式を固定。
+- [ ] Halo2 verifierのRust実装、C ABI、Nim marker-type wrapperを実装。
+- [ ] 正常proof、公開入力改変、VK/params相違、proof破損、不正点、過大入力の正負テストを用意。
+- [ ] ネイティブ・Nim FFI・対応するWasmランタイムで検証を**実行**して動作・性能を測定。
+- [ ] 非対応のHalo2プロファイル・ターゲット・バージョンを明示し、ドキュメントを整備。
+
+### Phase 7 — Plonky3 / WHIRの調査（オプション・別Issue化可）
+
+- [ ] Plonky3はPlonky2と異なるモジュラーなSTARKライブラリ群であり、単一の汎用proof formatがあるとは仮定しない。対象field（例：BabyBear）、PCS（例：FRI）、hash、AIRを指定して検証対象を定める。
+- [ ] WHIRは独立の多項式コミットメント方式であり、**WHIR検証器だけで任意のZK証明を検証できるわけではない**。親証明システムとtranscript、soundness、ZK性を合わせて評価する。
+- [ ] フォーク依存・仕様未確定・外部監査未完了の場合は研究段階とし、本リリースの必須完成条件に含めない。
+
+### 別Issue候補 — 汎用Prover API
+
+Proof生成までNimライブラリとして統合する場合は、回路定義/制約表現・Proving Key・Witness形式・乱数源・Trusted Setup/鍵生成を含めて別途設計する。生成APIはVerifier APIと同一のリリース完了条件に含めない。
+
+## 6. テストと受け入れ条件
+
+- [ ] 正常系：既知ベクトルでRust/Nim/Wasmの結果が一致し、Circom/snarkjs等の独立実装のProof/VKと相互運用できる。
+- [ ] 異常系：改変proof、異なるpublic input、入力順変更、異なるVK、不正curve point、非正規field、余剰bytes、短すぎる入力、過大な入力、NULL+非ゼロ長を適切に拒否。
+- [ ] 安全性：panicがFFI境界を越えない、メモリ所有権が明確、入力由来の無制限メモリ確保がない、検証失敗時に誤って成功しない。
+- [ ] 性能：ネイティブとWasmのベンチマークが測定可能であり、利用先ランタイムの制限以内に収まる。
+- [ ] 既存資産：BLS12-381を含む既存の暗号アルゴリズムに回帰がない。
+- [ ] PLONK：採用対象実装のProof/VK形式とFiat–Shamir transcriptが固定され、独立prover由来のfixtureと正負両方向で一致する。
+- [ ] Plonky2：Plonky2由来のproof＋verifier/common circuit dataをネイティブ・Nim FFIで検証し、対応するWasmターゲットでも実行検証する（非対応ターゲットは明示）。
+- [ ] Halo2：少なくとも1つの明示的なHalo2プロファイルで、独立生成した正しいproofの検証と、異なるparams・VK・public instances・不正proofの拒否を確認する。Native、Nim FFI、対応Wasmターゲットの実行テストがあり、非対応のプロファイルを明示する。
+- [ ] Groth16・PLONK・Plonky2・Halo2の各検証器に個別の相互運用・失敗テストがあり、他方式のproofを誤受理しない。
+- [ ] ドキュメント：公開API、wire format、Poseidon定数/バージョン、互換対象、制約、利用例、依存ライブラリ/ライセンス、未監査リスクを記載。
+
+## 7. 非対象
+
+- 特定のアプリケーション用の回路、状態管理、業務ロジック。
+- 特定プロトコル固有のアドレス、資産、台帳、認証・鍵復旧の仕様。
+- 初期実装フェーズ（Phase 0〜3）でのPLONK・Plonky2・Halo2対応。**Phase 4〜6で4方式のVerifier対応を完了する**。
+- 初期選定プロファイル以外のHalo2派生系・PCSとの自動互換（必要な場合は別プロファイルで追加）。
+- 任意のSTARK検証、一般化したRecursive Proof、任意のPCS（将来の拡張対象）。
+- Plonky3 / WHIRの本番級検証API（Phase 7では実現性調査のみ）。
+- 初期リリースでのGroth16 Prover・回路コンパイラ・Trusted Setup運営。
+- 暗号監査済みであるという保証。
+
+## 8. 参考資料
+
+- arkworks Groth16: https://github.com/arkworks-rs/groth16
+- ark-groth16 API: https://docs.rs/ark-groth16/latest/ark_groth16/
+- Poseidon候補: https://docs.rs/light-poseidon/latest/light_poseidon/
+- Circom/snarkjs: https://github.com/iden3/snarkjs
+- RustCrypto: https://github.com/RustCrypto
+- Plonky2: https://github.com/0xPolygonZero/plonky2
+- Plonky3: https://github.com/Plonky3/Plonky3
+- gnark PLONK: https://docs.gnark.consensys.io/HowTo/prove
+- Zcash Halo2: https://github.com/zcash/halo2
+- Halo2 Book: https://zcash.github.io/halo2/
+- PSE Halo2: https://pse.dev/projects/pse-halo2
+- WHIR paper: https://eprint.iacr.org/2024/1586
+
+**完了の定義（段階別）**：Phase 0〜3はBN254・Poseidon・Groth16 Verifier。Phase 4は対象実装と互換性のあるPLONK/BN254 Verifier。Phase 5は対象設定を固定したPlonky2 Verifier。Phase 6は少なくとも1つの明確に定義したHalo2プロファイルのVerifier。**4方式すべての実装・相互運用テスト完了をIssue全体の完了条件**とする。Phase 7は将来調査のみ。各方式のNative/Nim/対応Wasmでのテスト、性能、制約、非対応プロファイルを文書化する。
