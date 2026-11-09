@@ -9,6 +9,14 @@ import ./algorithm/test_hkdf
 import ./algorithm/test_hmac
 import ./algorithm/test_p256
 import ./algorithm/test_bls
+import ./algorithm/test_bn254
+import ./algorithm/test_groth16
+import ./algorithm/test_poseidon
+import ./algorithm/test_plonk
+import ./algorithm/test_plonky2
+when not defined(wasm32):
+  import ./algorithm/test_halo2
+  import ./algorithm/test_zkp_scheme_separation
 import ./algorithm/test_p384
 import ./algorithm/test_passwordhash
 import ./algorithm/test_pbkdf2

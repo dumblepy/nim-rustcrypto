@@ -7,6 +7,13 @@ import ./rustcrypto/algorithm/secp256k1
 import ./rustcrypto/algorithm/schnorr
 import ./rustcrypto/algorithm/p256
 import ./rustcrypto/algorithm/bls
+import ./rustcrypto/algorithm/bn254
+import ./rustcrypto/algorithm/poseidon
+import ./rustcrypto/algorithm/groth16
+import ./rustcrypto/algorithm/plonk
+import ./rustcrypto/algorithm/plonky2
+when not defined(wasm32):
+  import ./rustcrypto/algorithm/halo2
 import ./rustcrypto/algorithm/ed25519
 import ./rustcrypto/algorithm/rsa
 import ./rustcrypto/algorithm/bcrypt
@@ -24,6 +31,13 @@ export secp256k1
 export schnorr
 export p256
 export bls
+export bn254
+export poseidon
+export groth16
+export plonk
+export plonky2
+when not defined(wasm32):
+  export halo2
 export ed25519
 export rsa
 export bcrypt

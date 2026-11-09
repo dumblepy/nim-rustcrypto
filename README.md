@@ -7,7 +7,7 @@ Nim bindings to RustCrypto through a small Rust FFI static library. High-level A
 
 ## Features (summary)
 
-Hashing (SHA-256, SHA3-256, Keccak-256, BLAKE2), HMAC, HKDF, PBKDF2, scrypt, Argon2id, bcrypt, AEAD (ChaCha20-Poly1305, AES-256-GCM, AES-256-GCM-SIV), secp256k1 (ECDSA, Schnorr, recoverable ECDSA), Ed25519, NIST P-256 / P-384 ECDSA, **BLS12-381** (low-level curve/pairing via [`blst`](https://github.com/supranational/blst), `bls-signatures`-compatible minimal-pk-size signing, and minimal-signature-size G2-pk / G1-sig AUG hash-to-G1 verification), RSA (sign/verify, OAEP, PKCS#1 v1.5), X.509 minimal parsing, PKCS#8 / SPKI / PEM for supported keys, plus **Bitcoin**, **Lightning (BOLT-11 signing)**, **Ethereum**, and **JWT** helpers.
+Hashing (SHA-256, SHA3-256, Keccak-256, BLAKE2), HMAC, HKDF, PBKDF2, scrypt, Argon2id, bcrypt, AEAD (ChaCha20-Poly1305, AES-256-GCM, AES-256-GCM-SIV), secp256k1 (ECDSA, Schnorr, recoverable ECDSA), Ed25519, NIST P-256 / P-384 ECDSA, **BLS12-381** (low-level curve/pairing via [`blst`](https://github.com/supranational/blst), `bls-signatures`-compatible minimal-pk-size signing, and minimal-signature-size G2-pk / G1-sig AUG hash-to-G1 verification), RSA (sign/verify, OAEP, PKCS#1 v1.5), X.509 minimal parsing, PKCS#8 / SPKI / PEM for supported keys, plus **Bitcoin**, **Lightning (BOLT-11 signing)**, **Ethereum**, **JWT** helpers, and **zero-knowledge proof verifiers** (Groth16/BN254, a fixed PLONK/BN254 profile, Plonky2/Goldilocks, and a fixed Halo2 KZG/BN254 profile).
 
 ## Installation
 
@@ -64,6 +64,16 @@ Per-primitive and per-protocol guides (English):
 - [RSA signatures and encryption](docs/rsa-signatures-and-encryption.md)
 - [X.509 (minimal)](docs/x509-certificates.md)
 - [PKCS#8, SPKI, PEM (keys)](docs/key-encoding-pkcs8-pem.md)
+
+### Zero-knowledge proof verifiers
+
+- [BN254 fields and curve encodings](docs/bn254.md)
+- [Poseidon / BN254](docs/poseidon-bn254.md)
+- [Groth16 / BN254 verifier](docs/groth16-bn254.md)
+- [PLONK / BN254 verifier (genshi-core profile)](docs/plonk-bn254.md)
+- [Plonky2 / Goldilocks / FRI verifier](docs/plonky2.md)
+- [Halo2 KZG / BN254 verifier (PSE/Axiom SHPLONK profile)](docs/halo2.md)
+- [ZKP verifier dependencies, licenses, and target matrix](docs/zkp-dependencies.md)
 
 ### High-level protocol helpers
 

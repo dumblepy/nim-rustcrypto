@@ -10,11 +10,11 @@ jobs:
   # Linux x86_64 上の開発用 Docker イメージで、既存の test.sh（Rust + wasm/wasi クロスビルド + Nim）を実行する。
   linux-x86_64-docker-compose:
     name: Linux x86_64 (Docker)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build app image
         run: docker compose build app
@@ -33,11 +33,11 @@ jobs:
   # wasm / wasi（blst の C ビルドを含む）は Linux Docker ジョブで検証する（macOS の clang は wasm32-unknown-unknown 非対応）。
   macos-arm64-smoke:
     name: macOS arm64 (Apple Silicon)
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

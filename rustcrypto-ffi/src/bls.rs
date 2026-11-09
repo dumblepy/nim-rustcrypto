@@ -1697,12 +1697,16 @@ pub extern "C" fn rustcrypto_bls12_381_signature_verify_g1_aug_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bls_signatures::{
-        aggregate as bs_agg, hash as bs_hash, verify as bs_verify, PrivateKey, Serialize, Signature,
-    };
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect()
+    }
 
     #[test]
-    fn key_gen_matches_bls_signatures() {
+    fn key_gen_matches_reference_vector() {
         let material = b"hello world (it's a secret!) very secret stuff";
         let mut out = [0u8; 32];
         assert_eq!(
@@ -1714,23 +1718,34 @@ mod tests {
                 out.len(),
             )
         );
-        let sk = PrivateKey::new(material);
-        assert_eq!(out.as_slice(), sk.as_bytes().as_slice());
+        assert_eq!(
+            out.as_slice(),
+            unhex("9ad4e6897b18f8a9164bce6340f370f8a3ba1bff1f3caac23fe246ee87774160")
+        );
     }
 
     #[test]
-    fn sign_verify_roundtrip_matches() {
+    fn sign_verify_roundtrip_matches_reference_vector() {
         let msg = b"this is the message";
         let seed = b"this is the key and it is very secret";
         let mut sk = [0u8; 32];
         rustcrypto_bls12_381_signature_private_key_from_seed(seed.as_ptr(), seed.len(), sk.as_mut_ptr(), 32);
+        assert_eq!(
+            sk.as_slice(),
+            unhex("1d9c462741096ad8086a75fa62a82852f4ff4968d687f593f479be9dcd63ad3d")
+        );
         let mut pk = [0u8; 48];
         rustcrypto_bls12_381_signature_public_key(sk.as_ptr(), 32, pk.as_mut_ptr(), 48);
+        assert_eq!(
+            pk.as_slice(),
+            unhex("8d30a3a9c1ec97abd01e7934445dd39ce0890be26936029f9fd2e55917e746eb96750b47f3887dd2abcffccf54b9f42a")
+        );
         let mut sig = [0u8; 96];
         rustcrypto_bls12_381_signature_sign(msg.as_ptr(), msg.len(), sk.as_ptr(), 32, sig.as_mut_ptr(), 96);
-        let bs_sk = PrivateKey::new(seed);
-        let bs_sig = bs_sk.sign(msg);
-        assert_eq!(sig.as_slice(), bs_sig.as_bytes());
+        assert_eq!(
+            sig.as_slice(),
+            unhex("8eeb53ac9a9315c2b8f8ed82d942a8ae2c62f2c8f3d5a5bb383e14df5d0272d6cf805e8974be555132a8bd134ec811f215b38e056c7de57a022eefba22f2837b6548e1254e33a9d5e371c2ff8b2a3d5ea793f216372fc3d4e2f2a9ff8cc8c5f3")
+        );
         assert_eq!(
             RUSTCRYPTO_OK,
             rustcrypto_bls12_381_signature_verify_messages(
@@ -1743,9 +1758,6 @@ mod tests {
                 48,
             )
         );
-        let ref_pk = bls_signatures::PublicKey::from_bytes(&pk).unwrap();
-        assert!(ref_pk.verify(bs_sig, msg));
-        assert!(bs_verify(&bs_sig, &[bs_hash(msg)], &[ref_pk]));
     }
 
     #[test]
@@ -1794,11 +1806,11 @@ mod tests {
         rustcrypto_bls12_381_signature_sign(msg.as_ptr(), msg.len(), sk2.as_ptr(), 32, s2.as_mut_ptr(), 96);
         let mut agg = [0u8; 96];
         let slab: Vec<u8> = s1.iter().chain(s2.iter()).copied().collect();
-        let sig1 = Signature::from_bytes(&s1).unwrap();
-        let sig2 = Signature::from_bytes(&s2).unwrap();
-        let agg_bs = bs_agg(&[sig1, sig2]).unwrap();
         rustcrypto_bls12_381_signature_aggregate(slab.as_ptr(), slab.len(), 2, agg.as_mut_ptr(), 96);
-        assert_eq!(agg.as_slice(), agg_bs.as_bytes().as_slice());
+        assert_eq!(
+            agg.as_slice(),
+            unhex("b5a357ae85120f98a0537a291c9fdf652ff5bd37df5a9f45e2c1a382b33011290aa081300432ba955ebeb08f78dafddd15b272cfbfc578bc3f6a06156268c11eff405b45f5efe95e87d1213be50f726c2efcc9d48dcde923e064fd755ccf3166")
+        );
         let msgs = [msg.as_ptr(), msg.as_ptr()];
         let lens = [msg.len(), msg.len()];
         let mut pkb = [0u8; 96];
