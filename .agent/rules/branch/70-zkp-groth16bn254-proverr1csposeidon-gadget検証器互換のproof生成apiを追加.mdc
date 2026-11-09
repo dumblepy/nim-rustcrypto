@@ -4,13 +4,11 @@
 
 Shielded UTXO等でクライアントが秘密witnessからproofを作り、canisterの既存 `Groth16Bn254.verify(vk, proof, publicInputs)` で検証できるようにするため、**汎用的なProverと回路構築の足場**を追加する。**既存のIssue #69（Verifier）とは独立**して進める。ユースケース専用の送金回路は利用アプリで実装する。
 
-参照: [Synoria側 Shielded UTXO設計 #78](https://github.com/dumblepy/synoria-wallet/issues/78)。
-
 ## 提案するスコープ
 
 1. **Groth16/BN254のproduction-oriented proving core**：arkworks 0.5系列で、承認済みR1CS circuit + private witness + proving key + public inputsからproofを生成。APIを単純な任意byte blob入力だけにせず、証明すべき回路とwitnessの対応を規定する。汎用circuit registration/typed builder、もしくはコンパイル済み回路adapterのいずれかをADRで固定。
 2. **BN254 Fr向けPoseidon R1CS gadget**：ブランチ既存 `PoseidonBn254.hash`（`light-poseidon` 0.4.1 `bn254_x5` / Circom互換 / 1..12入力 / 入力32byte canonical BE）と**回路内部で同一値になる**こと。width、round constants、domain separation、field encodingを固定し、cross-vectorで検証。
-3. **回路側の標準gadget**：Merkle membership/hash path、conditional select、秘密鍵→公開鍵/Nullifier PRFの拘束方法、u64/u128 range check、overflowを許さないbounded sum等、アプリが組み合わせられる安全な下位部品を整備（アプリ固有のNote schema/authorization policyはSynoria側）。
+3. **回路側の標準gadget**：Merkle membership/hash path、conditional select、秘密鍵→公開鍵/Nullifier PRFの拘束方法、u64/u128 range check、overflowを許さないbounded sum等、アプリが組み合わせられる安全な下位部品を整備（アプリ固有のNote schema/authorization policyはアプリ側）。
 4. **Proof serialization**：既存 `Groth16Bn254.verify` のv1形式に完全一致する **proof 256 bytes（G1 A=64、G2 B=128、G1 C=64）**、VK `RCG16V1\0`、ordered Fr publicInputs=32byte canonical BE。snarkjs/arkworksの生形式を無変換で渡せると仮定しない。
 5. **setup/key distribution**：回路固有trusted setupの外部ツールとproving/verifying keyの生成・固定・ハッシュ/バージョン管理。テスト用deterministic setupと本番セットアップを明確に分離。任意のユーザー提供VKを本番Verifierが自動承認しない。
 6. **Nim/Rust FFI + browser integration**：Rust側でproverライブラリと安全なC ABI/バッファ所有権・必要な鍵のロード/公開APIを提供。Web/Extension/MobileでのproverはJS/WASM bridgeまたは専用WebAssemblyモジュールを検討し、実際に動作するサンプルを用意。**静的archiveがwasm32でビルドできるだけではブラウザ実行可能とみなさない**。

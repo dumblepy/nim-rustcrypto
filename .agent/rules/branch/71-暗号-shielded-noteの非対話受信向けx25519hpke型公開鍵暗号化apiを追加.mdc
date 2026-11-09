@@ -1,6 +1,6 @@
 ## 背景
 
-[Synoria Shielded UTXO設計 #78](https://github.com/dumblepy/synoria-wallet/issues/78)では、送信者が**受取人の公開view/encryption keyだけを使い**、Note平文を安全に暗号化し、ICP canisterには暗号文のみを記録する。
+送信者が**受取人の公開view/encryption keyだけを使い**、Note平文を安全に暗号化し、ICP canisterには暗号文のみを記録する。
 
 指定ZKPブランチ [Issue #69](https://github.com/dumblepy/nim-rustcrypto/issues/69) はBN254/Poseidonと複数ZKP Verifierを追加するが、`rustcrypto-ffi/Cargo.toml`、`src/rustcrypto/algorithm` の確認範囲では **X25519鍵共有/HPKEの公開APIがない**。既存 `chacha20poly1305`, `hkdf` は対称暗号/KDFであり、受取人公開鍵のみで非対話的に暗号化する機能を単体では実現しない。
 
@@ -31,7 +31,7 @@ proc open*(T: type NoteHpke, recipientSk: NoteEncryptionSecretKey,
            sealed, aad: openArray[byte]): seq[byte]
 ```
 
-公開APIは汎用HPKE等として命名してもよい（Synoria固有のNote/asset依存を入れない）。
+公開APIは汎用HPKE等として命名してもよい（アプリケーション固有のNote/asset依存を入れない）。
 
 ## 実装タスク
 
@@ -50,7 +50,7 @@ proc open*(T: type NoteHpke, recipientSk: NoteEncryptionSecretKey,
 - 公開commitment等へのAADバインディングをアプリが指定でき、改ざん・誤鍵・異なるAADは必ず復号拒否。
 - ブラウザとNim/Rustが相互運用し、共有秘密・nonce・その他の内部秘密をログ/エラーへ出さない。
 
-**範囲外:** メモの暗号化以外のアプリ固有のNote schema、zNoteの所有権証明、ZK回路とMerkle/Nullifierの実装（これらはSynoria側または別issue）。
+**範囲外:** メモの暗号化以外のアプリ固有のNote schema、zNoteの所有権証明、ZK回路とMerkle/Nullifierの実装（これらはアプリケーション側または別issue）。
 
 ## 調査結果・設計まとめ
 
