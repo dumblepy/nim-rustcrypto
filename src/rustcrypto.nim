@@ -49,3 +49,6 @@ export bitcoin
 export lightning
 export ethereum
 export jwt
+
+import ./rustcrypto/algorithm/hpke
+export hpke

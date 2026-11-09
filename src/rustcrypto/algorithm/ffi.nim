@@ -1324,3 +1324,22 @@ proc groth16Bn254SetupRaw*(
     key: ptr uint8; keyCap: csize_t; keyLen: ptr csize_t;
     vk: ptr uint8; vkCap: csize_t; vkLen: ptr csize_t
   ): cint {.cdecl, importc: "rustcrypto_groth16_bn254_setup".}
+
+# RFC 9180 Base mode: X25519 / HKDF-SHA256 / ChaCha20-Poly1305.
+proc hpkeGenerateSecretKeyRaw*(output: ptr uint8, outputLen: csize_t): cint
+  {.importc: "rustcrypto_hpke_generate_secret_key", cdecl.}
+proc hpkePublicKeyRaw*(key: ptr uint8, keyLen: csize_t,
+    output: ptr uint8, outputLen: csize_t): cint
+  {.importc: "rustcrypto_hpke_public_key", cdecl.}
+proc hpkeSealRaw*(key: ptr uint8, keyLen: csize_t,
+    info: ptr uint8, infoLen: csize_t, aad: ptr uint8, aadLen: csize_t,
+    plaintext: ptr uint8, plaintextLen: csize_t,
+    output: ptr uint8, outputLen: csize_t): cint
+  {.importc: "rustcrypto_hpke_seal", cdecl.}
+proc hpkeOpenRaw*(key: ptr uint8, keyLen: csize_t,
+    info: ptr uint8, infoLen: csize_t, aad: ptr uint8, aadLen: csize_t,
+    sealed: ptr uint8, sealedLen: csize_t,
+    output: ptr uint8, outputLen: csize_t): cint
+  {.importc: "rustcrypto_hpke_open", cdecl.}
+proc hpkeClearSecretKeyRaw*(key: ptr uint8, keyLen: csize_t): cint
+  {.importc: "rustcrypto_hpke_clear_secret_key", cdecl.}
