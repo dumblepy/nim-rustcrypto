@@ -10,12 +10,23 @@ mod bcrypt;
 mod bcrypt_wasm;
 mod bls;
 mod blake2;
+mod bn254;
 mod chacha20poly1305;
 mod ed25519;
+mod groth16;
+#[cfg(not(target_arch = "wasm32"))]
+mod halo2;
 mod hash;
 mod hkdf;
 mod hmac;
 mod oid;
+mod plonk_bn254;
+mod plonky2;
+mod poseidon;
+
+/// Helpers for producing deterministic test fixtures (not part of the C ABI).
+#[doc(hidden)]
+pub mod fixture;
 mod p256;
 mod p384;
 mod password_hash;
@@ -50,6 +61,12 @@ pub const RUSTCRYPTO_ERR_INVALID_PASSWORD_HASH_FORMAT: c_int = 16;
 pub const RUSTCRYPTO_ERR_INVALID_CERTIFICATE: c_int = 17;
 pub const RUSTCRYPTO_ERR_DECRYPTION_FAILED: c_int = 18;
 pub const RUSTCRYPTO_ERR_RANDOM_FAILED: c_int = 19;
+pub const RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT: c_int = 20;
+pub const RUSTCRYPTO_ERR_INVALID_CURVE_POINT: c_int = 21;
+pub const RUSTCRYPTO_ERR_INVALID_PROOF_FORMAT: c_int = 22;
+pub const RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY: c_int = 23;
+pub const RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT: c_int = 24;
+pub const RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA: c_int = 25;
 pub const RUSTCRYPTO_ERR_PANIC: c_int = -1;
 
 pub const SHA256_DIGEST_LEN: usize = 32;
@@ -124,3 +141,21 @@ pub const BLS12_381_G1_COMPRESSED_LEN: usize = bls::BLS12_381_G1_COMPRESSED_LEN;
 pub const BLS12_381_G1_UNCOMPRESSED_LEN: usize = bls::BLS12_381_G1_UNCOMPRESSED_LEN;
 pub const BLS12_381_G2_COMPRESSED_LEN: usize = bls::BLS12_381_G2_COMPRESSED_LEN;
 pub const BLS12_381_G2_UNCOMPRESSED_LEN: usize = bls::BLS12_381_G2_UNCOMPRESSED_LEN;
+pub const BN254_FR_LEN: usize = bn254::BN254_FR_LEN;
+pub const BN254_G1_LEN: usize = bn254::BN254_G1_LEN;
+pub const BN254_G2_LEN: usize = bn254::BN254_G2_LEN;
+pub const GROTH16_BN254_PROOF_V1_LEN: usize = groth16::GROTH16_BN254_PROOF_V1_LEN;
+pub const GROTH16_BN254_VK_V1_HEADER_LEN: usize = groth16::GROTH16_BN254_VK_V1_HEADER_LEN;
+pub const GROTH16_BN254_MAX_IC_LEN: usize = groth16::GROTH16_BN254_MAX_IC_LEN;
+pub const GROTH16_BN254_MAX_PUBLIC_INPUTS: usize = groth16::GROTH16_BN254_MAX_PUBLIC_INPUTS;
+pub const POSEIDON_BN254_MAX_INPUTS: usize = poseidon::POSEIDON_BN254_MAX_INPUTS;
+pub const PLONK_BN254_VK_V1_LEN: usize = plonk_bn254::PLONK_BN254_VK_V1_LEN;
+pub const PLONK_BN254_PROOF_V1_MIN_LEN: usize = plonk_bn254::PLONK_BN254_PROOF_V1_MIN_LEN;
+pub const PLONK_BN254_MAX_PUBLIC_INPUTS: usize = plonk_bn254::PLONK_BN254_MAX_PUBLIC_INPUTS;
+pub const PLONKY2_MAX_BLOB_LEN: usize = plonky2::PLONKY2_MAX_BLOB_LEN;
+#[cfg(not(target_arch = "wasm32"))]
+pub const HALO2_KZG_BN254_PARAMS_V1_LEN: usize = halo2::HALO2_KZG_BN254_PARAMS_V1_LEN;
+#[cfg(not(target_arch = "wasm32"))]
+pub const HALO2_KZG_BN254_MAX_PROTOCOL_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROTOCOL_LEN;
+#[cfg(not(target_arch = "wasm32"))]
+pub const HALO2_KZG_BN254_MAX_PROOF_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROOF_LEN;

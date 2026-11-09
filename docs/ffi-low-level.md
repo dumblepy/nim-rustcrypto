@@ -22,6 +22,25 @@ Minimal-signature-size + message augmentation (G2 public key, G1 signature/hash,
 
 Prefer the high-level `rustcrypto/algorithm/bls` module when possible.
 
+## Zero-knowledge proof verifier families
+
+- **BN254 / Poseidon / Groth16:** `rustcrypto_bn254_*`, `rustcrypto_poseidon_bn254_*`,
+  and `rustcrypto_groth16_bn254_*`. Verification helpers include
+  `rustcrypto_groth16_bn254_verify`, `_vk_validate`, and `_proof_validate`.
+- **PLONK (genshi-core profile):** `rustcrypto_plonk_bn254_verify`, `_vk_validate`,
+  `_proof_validate`.
+- **Plonky2:** `rustcrypto_plonky2_verify`, `rustcrypto_plonky2_verifier_validate`,
+  `rustcrypto_plonky2_common_validate`.
+- **Halo2 (PSE/Axiom KZG/BN254, SHPLONK, Blake2b):**
+  `rustcrypto_halo2_kzg_bn254_verify`, `_params_validate`, `_vk_validate`, and
+  `_instances_validate`. Native targets only; the wasm archives do not contain these
+  symbols.
+
+All verifier entry points return `RustCryptoOk` on success,
+`RustCryptoErrVerificationFailed` for a well-formed but invalid proof, and a distinct
+error code for malformed inputs. See the per-algorithm documents for wire formats and
+compatibility profiles.
+
 ## Typical pattern
 
 1. Allocate output buffers with correct lengths (see `*Len` constants in the same module).
@@ -56,7 +75,13 @@ The following are used across primitives (see `ffi.nim` for the full list):
 | `RustCryptoErrOutputTooShort` | Output buffer too small |
 | `RustCryptoErrNullInputWithData` | Nil pointer with non-zero length |
 | `RustCryptoErrAuthenticationFailed` | AEAD tag verification failed |
-| `RustCryptoErrVerificationFailed` | Signature or password verify failed |
+| `RustCryptoErrVerificationFailed` | Signature or proof verification failed |
+| `RustCryptoErrInvalidFieldElement` (20) | Non-canonical BN254 field element |
+| `RustCryptoErrInvalidCurvePoint` (21) | Off-curve / wrong-subgroup point |
+| `RustCryptoErrInvalidProofFormat` (22) | Malformed proof encoding |
+| `RustCryptoErrInvalidVerifyingKey` (23) | Malformed verifying key |
+| `RustCryptoErrInvalidPublicInputCount` (24) | Public-input count mismatch |
+| `RustCryptoErrInvalidCircuitData` (25) | Malformed Plonky2 common circuit data |
 | `RustCryptoErrPanic` | Rust side caught a panic at the FFI boundary |
 
 Prefer the typed wrappers (`sha256`, `aes256gcmEncrypt`, …) unless you are extending the library.

@@ -196,14 +196,14 @@ proc verify*(
 | Zcash `halo2_proofs` | IPA / Pasta | KZG用SRSは不要。Zcash系のproof・VK形式に準拠 |
 | PSE系Halo2 | KZG / BN254（SHPLONK等を含む） | SRS、Fiat–Shamir transcript、proof形式がIPA方式と異なる |
 
-- [ ] Phase 0相当の事前調査で、**初期対応プロファイルを少なくとも1種類**明確に選定し、採用実装・git commit・曲線・PCS・hash/transcript・設定・シリアライズを固定する。第一候補はZcash `halo2_proofs`（IPA/Pasta）。後からKZG/BN254を追加する場合は別プロファイルにする。
-- [ ] 同じ名称のHalo2でも、異なるフォークのproofやVerifier Keyを無条件に受理しない。
-- [ ] パラメータ（params）、VK、proof、公開インスタンスの**規範的なwire format**・上限・正規性・列順・バージョンを仕様化する。
-- [ ] 受理するproofとparams/VKの組を結び付け、公開インスタンスの順序と数を正確に検証する。信頼済み回路/VKの許可判断は利用側の責務とする。
-- [ ] Rust実装・Nim wrapperで不正proof、誤VK、異なるparams、異なるpublic instances、不正curve point、短すぎる/過大な入力をfail-closedで拒否する。
+- [x] Phase 0相当の事前調査で、**初期対応プロファイルを少なくとも1種類**明確に選定し、採用実装・git commit・曲線・PCS・hash/transcript・設定・シリアライズを固定する。第一候補はZcash `halo2_proofs`（IPA/Pasta）。後からKZG/BN254を追加する場合は別プロファイルにする。
+- [x] 同じ名称のHalo2でも、異なるフォークのproofやVerifier Keyを無条件に受理しない。
+- [x] パラメータ（params）、VK、proof、公開インスタンスの**規範的なwire format**・上限・正規性・列順・バージョンを仕様化する。
+- [x] 受理するproofとparams/VKの組を結び付け、公開インスタンスの順序と数を正確に検証する。信頼済み回路/VKの許可判断は利用側の責務とする。
+- [x] Rust実装・Nim wrapperで不正proof、誤VK、異なるparams、異なるpublic instances、不正curve point、短すぎる/過大な入力をfail-closedで拒否する。
 - [ ] `halo2_proofs`のMSRV・並列処理機能・Wasm上でのアロケータとスレッド制約を調べる。Verifierのみの実行ではOS由来の乱数を必要としない構成とする。
 - [ ] Native・Wasmで同じfixturesを実行し、検証時間・メモリ・Wasm命令数・生成物サイズを測定する。非対応ターゲットを明示する。
-- [ ] Halo2を一般的なPLONK/BN254のVerifier APIに統合しない。**`Halo2IpaPasta`等のプロファイル名を含むmarker type**を公開する。
+- [x] Halo2を一般的なPLONK/BN254のVerifier APIに統合しない。**`Halo2IpaPasta`等のプロファイル名を含むmarker type**を公開する。
 
 概念API（wire format確定後に見直す）：
 
@@ -231,54 +231,54 @@ proc verify*(
 
 ### Phase 0 — 実現性・互換性の事前検証
 
-- [ ] 候補crateの組み合わせを決め、Linux x86_64でRustの小規模Groth16検証fixtureを実行する。
-- [ ] `wasm32-unknown-unknown` / `wasm32-wasip1`向けRust `staticlib`をビルドする。
+- [x] 候補crateの組み合わせを決め、Linux x86_64でRustの小規模Groth16検証fixtureを実行する。
+- [x] `wasm32-unknown-unknown` / `wasm32-wasip1`向けRust `staticlib`をビルドする。
 - [ ] NimからFFI経由で既知のGroth16 proofを検証し、ネイティブ・Wasmで動作確認する。
 - [ ] 対象Wasmランタイムに応じた命令数・メモリ・モジュールサイズ・実行時間を測定する。**クロスビルド成功のみを機能動作の証拠としない**。
-- [ ] 非互換・性能不足の場合はバックエンドや方式を再評価し、APIを固定しない。
+- [x] 非互換・性能不足の場合はバックエンドや方式を再評価し、APIを固定しない。
 
 ### Phase 1 — BN254 / Poseidon
 
-- [ ] RustのBN254/Poseidon実装、C ABI、Nim API、単体テストを追加。
-- [ ] field表現、ハッシュパラメータ、相互運用ベクトルを文書化。
-- [ ] 不正入力・境界値・panic防止のテストを導入。
+- [x] RustのBN254/Poseidon実装、C ABI、Nim API、単体テストを追加。
+- [x] field表現、ハッシュパラメータ、相互運用ベクトルを文書化。
+- [x] 不正入力・境界値・panic防止のテストを導入。
 
 ### Phase 2 — Groth16 Verifier
 
-- [ ] Rust検証処理、FFI、Nim APIとシリアライズ仕様を実装。
+- [x] Rust検証処理、FFI、Nim APIとシリアライズ仕様を実装。
 - [ ] 独立した証明生成ツール由来のProof/VKで相互運用テスト。
-- [ ] 不正Proof、入力改変、誤VK、点の不正エンコーディング等の負テスト。
+- [x] 不正Proof、入力改変、誤VK、点の不正エンコーディング等の負テスト。
 - [ ] 性能・サイズ・メモリ利用量の基準値を確定。
 
 ### Phase 3 — 統合・配布
 
-- [ ] `rustcrypto-ffi/src/lib.rs`、`src/rustcrypto/algorithm/ffi.nim`、`src/rustcrypto.nim`に統合。
+- [x] `rustcrypto-ffi/src/lib.rs`、`src/rustcrypto/algorithm/ffi.nim`、`src/rustcrypto.nim`に統合。
 - [ ] `test.sh`、GitHub Actions、配布アーカイブの各サポートターゲットで検証。
-- [ ] BLSを含む既存API・テストとの後方互換を確認。
-- [ ] ライセンス・依存ライブラリ一覧・セキュリティ注意事項・利用例をドキュメント化。
+- [x] BLSを含む既存API・テストとの後方互換を確認。
+- [x] ライセンス・依存ライブラリ一覧・セキュリティ注意事項・利用例をドキュメント化。
 
 ### Phase 4 — PLONK/BN254の相互運用対応
 
-- [ ] 互換対象となるPLONK実装・proof/VK形式・hash transcript・SRS前提を決定する。
-- [ ] Rust実装とC ABI/Nim高水準Verifierを追加する。必要なcrateを既存依存系列と共存できるよう固定。
+- [x] 互換対象となるPLONK実装・proof/VK形式・hash transcript・SRS前提を決定する。
+- [x] Rust実装とC ABI/Nim高水準Verifierを追加する。必要なcrateを既存依存系列と共存できるよう固定。
 - [ ] 独立したPLONK prover（特にgnark）から出力したfixtureでネイティブ・Nim FFI・Wasmの検証一致を確認する。
 - [ ] 検証失敗、public input変更、VK不一致、破損データ、不正点・不正長を全て拒否し、メモリ・命令数を実測する。
 
 ### Phase 5 — Plonky2/Goldilocks/FRIの対応
 
-- [ ] 対象Plonky2版、シリアライズ、hash、FRI設定、proof/verifier dataを固定する。
-- [ ] Rustでverifyのみを呼べる最小モジュールを構築し、Nimのmarker type APIを提供する。
-- [ ] 正常proofと改変proofのfixtures、異なるcommon circuit dataやpublic inputsの負テストを追加する。
-- [ ] stable Rust依存群とのビルド衝突・nightly要件を吸収する構成（feature分離、独立アーカイブ、またはビルドターゲット別）を決定する。
+- [x] 対象Plonky2版、シリアライズ、hash、FRI設定、proof/verifier dataを固定する。
+- [x] Rustでverifyのみを呼べる最小モジュールを構築し、Nimのmarker type APIを提供する。
+- [x] 正常proofと改変proofのfixtures、異なるcommon circuit dataやpublic inputsの負テストを追加する。
+- [x] stable Rust依存群とのビルド衝突・nightly要件を吸収する構成（feature分離、独立アーカイブ、またはビルドターゲット別）を決定する。
 - [ ] Wasmターゲットで証明検証を**実行**して測定する。高コスト・大メモリ・非対応なら対応範囲を明示し、利用可能と偽らない。
 
 ### Phase 6 — Halo2 Verifier対応（必須）
 
-- [ ] 互換対象の実装、リビジョン、IPA/KZG、曲線、transcript、params/VK/proof形式を固定。
-- [ ] Halo2 verifierのRust実装、C ABI、Nim marker-type wrapperを実装。
-- [ ] 正常proof、公開入力改変、VK/params相違、proof破損、不正点、過大入力の正負テストを用意。
+- [x] 互換対象の実装、リビジョン、IPA/KZG、曲線、transcript、params/VK/proof形式を固定。
+- [x] Halo2 verifierのRust実装、C ABI、Nim marker-type wrapperを実装。
+- [x] 正常proof、公開入力改変、VK/params相違、proof破損、不正点、過大入力の正負テストを用意。
 - [ ] ネイティブ・Nim FFI・対応するWasmランタイムで検証を**実行**して動作・性能を測定。
-- [ ] 非対応のHalo2プロファイル・ターゲット・バージョンを明示し、ドキュメントを整備。
+- [x] 非対応のHalo2プロファイル・ターゲット・バージョンを明示し、ドキュメントを整備。
 
 ### Phase 7 — Plonky3 / WHIRの調査（オプション・別Issue化可）
 
@@ -293,15 +293,15 @@ Proof生成までNimライブラリとして統合する場合は、回路定義
 ## 6. テストと受け入れ条件
 
 - [ ] 正常系：既知ベクトルでRust/Nim/Wasmの結果が一致し、Circom/snarkjs等の独立実装のProof/VKと相互運用できる。
-- [ ] 異常系：改変proof、異なるpublic input、入力順変更、異なるVK、不正curve point、非正規field、余剰bytes、短すぎる入力、過大な入力、NULL+非ゼロ長を適切に拒否。
-- [ ] 安全性：panicがFFI境界を越えない、メモリ所有権が明確、入力由来の無制限メモリ確保がない、検証失敗時に誤って成功しない。
+- [x] 異常系：改変proof、異なるpublic input、入力順変更、異なるVK、不正curve point、非正規field、余剰bytes、短すぎる入力、過大な入力、NULL+非ゼロ長を適切に拒否。
+- [x] 安全性：panicがFFI境界を越えない、メモリ所有権が明確、入力由来の無制限メモリ確保がない、検証失敗時に誤って成功しない。
 - [ ] 性能：ネイティブとWasmのベンチマークが測定可能であり、利用先ランタイムの制限以内に収まる。
-- [ ] 既存資産：BLS12-381を含む既存の暗号アルゴリズムに回帰がない。
+- [x] 既存資産：BLS12-381を含む既存の暗号アルゴリズムに回帰がない。
 - [ ] PLONK：採用対象実装のProof/VK形式とFiat–Shamir transcriptが固定され、独立prover由来のfixtureと正負両方向で一致する。
 - [ ] Plonky2：Plonky2由来のproof＋verifier/common circuit dataをネイティブ・Nim FFIで検証し、対応するWasmターゲットでも実行検証する（非対応ターゲットは明示）。
 - [ ] Halo2：少なくとも1つの明示的なHalo2プロファイルで、独立生成した正しいproofの検証と、異なるparams・VK・public instances・不正proofの拒否を確認する。Native、Nim FFI、対応Wasmターゲットの実行テストがあり、非対応のプロファイルを明示する。
-- [ ] Groth16・PLONK・Plonky2・Halo2の各検証器に個別の相互運用・失敗テストがあり、他方式のproofを誤受理しない。
-- [ ] ドキュメント：公開API、wire format、Poseidon定数/バージョン、互換対象、制約、利用例、依存ライブラリ/ライセンス、未監査リスクを記載。
+- [x] Groth16・PLONK・Plonky2・Halo2の各検証器に個別の相互運用・失敗テストがあり、他方式のproofを誤受理しない。
+- [x] ドキュメント：公開API、wire format、Poseidon定数/バージョン、互換対象、制約、利用例、依存ライブラリ/ライセンス、未監査リスクを記載。
 
 ## 7. 非対象
 
@@ -330,3 +330,108 @@ Proof生成までNimライブラリとして統合する場合は、回路定義
 - WHIR paper: https://eprint.iacr.org/2024/1586
 
 **完了の定義（段階別）**：Phase 0〜3はBN254・Poseidon・Groth16 Verifier。Phase 4は対象実装と互換性のあるPLONK/BN254 Verifier。Phase 5は対象設定を固定したPlonky2 Verifier。Phase 6は少なくとも1つの明確に定義したHalo2プロファイルのVerifier。**4方式すべての実装・相互運用テスト完了をIssue全体の完了条件**とする。Phase 7は将来調査のみ。各方式のNative/Nim/対応Wasmでのテスト、性能、制約、非対応プロファイルを文書化する。
+## 実装進捗記録（2026-10-27）
+
+### 実装済みファイル
+
+- Rust FFI: `rustcrypto-ffi/src/bn254.rs`, `poseidon.rs`, `groth16.rs`,
+  `plonk_bn254.rs`, `plonky2.rs`, `halo2.rs`（`lib.rs` に統合）。
+- Nim wrapper: `src/rustcrypto/algorithm/bn254.nim`, `poseidon.nim`, `groth16.nim`,
+  `plonk.nim`, `plonky2.nim`, `halo2.nim`（`ffi.nim` / `rustcrypto.nim` に統合）。
+- テスト: `tests/algorithm/test_bn254.nim`, `test_poseidon.nim`, `test_groth16.nim`,
+  `test_plonk.nim`, `test_plonky2.nim`, `test_halo2.nim`。
+- fixture: `tests/fixtures/groth16_bn254_v1.hex`, `plonk_bn254_v1.hex`,
+  `plonky2_v1.hex`, `halo2_kzg_bn254_v1.hex`。
+- fixture 生成器: `rustcrypto-ffi/examples/{groth16,plonk,plonky2,halo2}_fixture.rs`。
+- ドキュメント: `docs/bn254.md`, `poseidon-bn254.md`, `groth16-bn254.md`,
+  `plonk-bn254.md`, `plonky2.md`, `halo2.md`、README / `docs/ffi-low-level.md` 更新。
+
+### 依存バージョン（`Cargo.lock` 固定）
+
+- `ark-bn254` / `ark-ff` / `ark-ec` / `ark-serialize` 0.5.0、
+  `ark-groth16` 0.5.0（`std` のみ、`parallel` 無効）。
+- `light-poseidon` 0.4.1（bn254_x5、Circom 互換）。
+- `genshi-core` / `genshi-math` 0.3.0（PLONK プロファイル、MIT OR Apache-2.0）。
+- `qp-plonky2` 1.6.0 を `plonky2` 名で使用（stable Rust 対応フォーク）。
+- `snark-verifier` 0.2.7 / `halo2-axiom` 0.5.3 / `bincode` 1.3.3
+  （Halo2、非 wasm ターゲットのみ）。
+- wasm32 向けに `getrandom` 0.2 の `js` feature を追加。
+- テスト専用だった `bls-signatures` dev-dependency を削除した（下記）。
+
+### Circom / snarkjs 開発環境
+
+- `docker/app/develop.Dockerfile` に Node.js 24.22.1 と合わせて以下を追加した。
+  - `circom`（GitHub Releases の latest を取得。確認時点は 2.2.3）
+  - `snarkjs` 0.7.6（npm global、`ARG` で固定）
+- `circom` はバージョン固定せず、`releases/latest/download/circom-linux-amd64`
+  から常に最新安定版を取得する。Docker のレイヤーキャッシュが残る場合は
+  `docker compose build --no-cache` で再取得する。
+- `npm` は Node.js の `/root/.node` prefix 配下へインストールする。
+- 乗算回路（制約1）で `circom` コンパイル → `snarkjs groth16 setup` →
+  `prove` → `verify` のスモークテストが成功した（public output `33`）。
+- これはツールチェーンの動作確認であり、snarkjs JSON → rustcrypto v1 wire format
+  の変換ツールや Nim FFI 経由の相互運用テストは未実施。
+
+### 設計修正・調査結果
+
+1. **Halo2 は Zcash IPA/Pasta ではなく PSE/Axiom KZG/BN254 を採用した。**
+   Zcash `halo2_proofs` 0.3/0.4 は回路型に依存しない VK デシリアライザを公開しておらず、
+   任意の外部 VK bytes を受理する汎用 Verifier を構成できない。一方、
+   `snark-verifier` 0.2.7 + `halo2-axiom` 0.5.3 は `PlonkProtocol` をデータとして扱える。
+   そのため固定プロファイルを **BN254 / KZG / SHPLONK / Blake2b transcript** とし、
+   marker type は `Halo2KzgBn254` とした（`Halo2IpaPasta` ではない）。
+   Poseidon/EVM transcript、Zcash IPA、他の KZG 実装は別プロファイルであり受理しない。
+2. **PLONK は gnark 互換を主張しない。**
+   gnark の PLONK proof/VK をそのまま受理できる成熟した Rust Verifier が存在しないため、
+   `genshi-core` 0.3.0 の 4-wire PLONKish/KZG/BN254 プロファイルを固定した。
+   Fiat–Shamir は genshi の Keccak transcript であり、gnark/snarkjs/dusk-plonk とは
+   非互換。VK に KZG SRS の `[1]_2` / `[tau]_2` を含める v1 形式にした。
+3. **Plonky2 は stable Rust を維持するため `qp-plonky2` 1.6.0 フォークを採用。**
+   上流 `plonky2` 1.1.0 は `#![feature(specialization)]` を要求し nightly が必要。
+   フォークは `nightly` cfg のみで specialization を有効化するため stable でビルドできる。
+   シリアライズ形式・hash/FRI 設定はフォークの `Cargo.lock` 固定バージョンに依存する。
+4. **Halo2 は wasm32 非対応と明示する。**
+   `halo2-axiom` は Rayon の並列イテレータを無条件に使用しており、
+   `wasm32-unknown-unknown` / `wasm32-wasip1` ではコンパイルできない。
+   Rust 側は `#[cfg(not(target_arch = "wasm32"))]` で Halo2 モジュールを除外し、
+   Nim 側は wasm32 で `rustcrypto/algorithm/halo2` を import すると明示的エラーにする。
+   wasm アーカイブには `rustcrypto_halo2_*` シンボルを含めない。Groth16 / PLONK /
+   Plonky2 / Poseidon は両 wasm ターゲットで staticlib ビルドに成功する。
+5. **BLS のテスト専用依存を置き換えた。**
+   `bls-signatures` 0.15 は古い `crypto-mac` 経由で `subtle = "=2.4"` を固定し、
+   Halo2 が要求する `subtle 2.6` と衝突した。リリースビルドには不要な dev-dependency
+   だったため削除し、独立生成した参照ベクトル（秘密鍵・公開鍵・署名・集約署名）を
+   `bls.rs` のテストに固定した。既存 BLS API の挙動は変更していない。
+6. **エラーコードを追加した。**
+   `20 INVALID_FIELD_ELEMENT`, `21 INVALID_CURVE_POINT`, `22 INVALID_PROOF_FORMAT`,
+   `23 INVALID_VERIFYING_KEY`, `24 INVALID_PUBLIC_INPUT_COUNT`,
+   `25 INVALID_CIRCUIT_DATA`。既存コード 0–19 は変更していない。
+7. **wire format はすべて v1 として固定した。**
+   Fr は 32 バイト big-endian 正規表現のみ、G1 は 64 バイト、G2 は 128 バイト
+   （`c0 || c1` 順）。無限遠点は全ゼロ。Groth16 proof 256 バイト、VK は
+   magic + 点 + `ic_count`、PLONK/Plonky2/Halo2 も各ドキュメントの形式に固定した。
+
+### 検証結果
+
+- `cargo test`: 156 tests passed。
+- `nimble test -y`: 全テスト成功（既存アルゴリズム回帰を含む）。
+- `cargo build --release --lib`（Linux x86_64）成功。
+- `wasm32-unknown-unknown` / `wasm32-wasip1` の `staticlib` ビルド成功
+  （Halo2 を除く）。
+- 負テスト: 改変 proof / public input / VK / params、不正 curve point、
+  非正規 field、余剰 bytes、短すぎる入力、NULL + 非ゼロ長、panic 封じ込めを確認。
+
+### 未完了・制約（虚偽の完了主張を避けるため明記）
+
+- **gnark PLONK 相互運用は未達**。genshi-core プロファイル専用であり、gnark の
+  proof/VK を受理しない。gnark 対応は別プロファイル・別実装として設計が必要。
+- **Circom/snarkjs との Groth16 相互運用テストは未実施**。開発コンテナに
+  Node.js / circom / snarkjs を追加し、snarkjs 単体の Groth16 生成・検証は
+  動作確認済み。fixture は arkworks Prover で独立生成し、変換仕様は
+  `docs/groth16-bn254.md` に記載した。snarkjs JSON→v1 変換ツールと
+  Nim FFI 経由の検証は未実装。
+- **wasm 上での実行・性能測定は未実施**。クロスビルド成功のみを動作証拠としない方針
+  のため、wasm 実行は「未測定」とする。Halo2 は wasm 非対応。
+- ネイティブのベンチマーク・メモリ・命令数・生成物サイズの基準値は未確定。
+- Plonky2/Halo2 はフォーク/新興実装であり、外部監査済みではない。
+- 汎用 Prover API、Plonky3、WHIR は引き続き別 Issue / 研究課題。

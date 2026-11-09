@@ -31,6 +31,11 @@ when rustCryptoStaticLib.len == 0:
 
 {.passL: rustCryptoStaticLib.}
 
+# arkworks/light-poseidon/genshi pull in num-integer, which may call libm functions.
+# The archive must precede this flag, hence a second `-lm` after the static library.
+when not defined(wasm32):
+  {.passL: "-lm".}
+
 const
   SHA256DigestLen* = 32
   HmacSha256MacLen* = 32
@@ -103,6 +108,27 @@ const
   Bls12381G2UncompressedLen* = 192
   BlsPointFormatUncompressed* = 0.cint
   BlsPointFormatCompressed* = 1.cint
+  Bn254FrLen* = 32
+  Bn254G1Len* = 64
+  Bn254G2Len* = 128
+  Groth16Bn254ProofV1Len* = 256
+  Groth16Bn254VkV1HeaderLen* = 8
+  Groth16Bn254MaxIcLen* = 4096
+  Groth16Bn254MaxPublicInputs* = 4095
+  PoseidonBn254MaxInputs* = 12
+  PlonkBn254VkV1Len* = 1148
+  PlonkBn254ProofV1MinLen* = 1028
+  PlonkBn254MaxPublicInputs* = 4096
+  Plonky2MaxBlobLen* = 16 * 1024 * 1024
+  Halo2KzgBn254ParamsV1Len* = 328
+  Halo2KzgBn254MaxProtocolLen* = 2 * 1024 * 1024
+  Halo2KzgBn254MaxProofLen* = 16 * 1024 * 1024
+  RustCryptoErrInvalidFieldElement* = 20.cint
+  RustCryptoErrInvalidCurvePoint* = 21.cint
+  RustCryptoErrInvalidProofFormat* = 22.cint
+  RustCryptoErrInvalidVerifyingKey* = 23.cint
+  RustCryptoErrInvalidPublicInputCount* = 24.cint
+  RustCryptoErrInvalidCircuitData* = 25.cint
 
 proc sha256Raw*(
     input: ptr uint8,
@@ -1176,3 +1202,112 @@ proc bls12_381SignatureVerifyG1AugMessageRaw*(
     publicKey: ptr uint8,
     publicKeyLen: csize_t,
   ): cint {.cdecl, importc: "rustcrypto_bls12_381_signature_verify_g1_aug_message".}
+
+proc bn254FrValidateRaw*(
+    input: ptr uint8,
+    inputLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_bn254_fr_validate".}
+
+proc bn254G1ValidateRaw*(
+    point: ptr uint8,
+    pointLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_bn254_g1_validate".}
+
+proc bn254G2ValidateRaw*(
+    point: ptr uint8,
+    pointLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_bn254_g2_validate".}
+
+proc poseidonBn254HashRaw*(
+    inputs: ptr uint8,
+    inputsLen: csize_t,
+    inputCount: csize_t,
+    output: ptr uint8,
+    outputLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_poseidon_bn254_hash".}
+
+proc groth16Bn254VerifyRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+    proof: ptr uint8,
+    proofLen: csize_t,
+    publicInputs: ptr uint8,
+    publicInputsLen: csize_t,
+    publicInputCount: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_groth16_bn254_verify".}
+
+proc groth16Bn254VkValidateRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_groth16_bn254_vk_validate".}
+
+proc groth16Bn254ProofValidateRaw*(
+    proof: ptr uint8,
+    proofLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_groth16_bn254_proof_validate".}
+
+proc plonkBn254VerifyRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+    proof: ptr uint8,
+    proofLen: csize_t,
+    publicInputs: ptr uint8,
+    publicInputsLen: csize_t,
+    publicInputCount: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_plonk_bn254_verify".}
+
+proc plonkBn254VkValidateRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_plonk_bn254_vk_validate".}
+
+proc plonkBn254ProofValidateRaw*(
+    proof: ptr uint8,
+    proofLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_plonk_bn254_proof_validate".}
+
+proc plonky2VerifyRaw*(
+    proofWithPublicInputs: ptr uint8,
+    proofWithPublicInputsLen: csize_t,
+    verifierOnlyCircuitData: ptr uint8,
+    verifierOnlyCircuitDataLen: csize_t,
+    commonCircuitData: ptr uint8,
+    commonCircuitDataLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_plonky2_verify".}
+
+proc plonky2VerifierValidateRaw*(
+    verifierOnlyCircuitData: ptr uint8,
+    verifierOnlyCircuitDataLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_plonky2_verifier_validate".}
+
+proc plonky2CommonValidateRaw*(
+    commonCircuitData: ptr uint8,
+    commonCircuitDataLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_plonky2_common_validate".}
+
+when not defined(wasm32):
+  proc halo2KzgBn254VerifyRaw*(
+    params: ptr uint8,
+    paramsLen: csize_t,
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+    proof: ptr uint8,
+    proofLen: csize_t,
+    publicInstances: ptr uint8,
+    publicInstancesLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_verify".}
+
+  proc halo2KzgBn254ParamsValidateRaw*(
+    params: ptr uint8,
+    paramsLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_params_validate".}
+
+  proc halo2KzgBn254VkValidateRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_vk_validate".}
+
+  proc halo2KzgBn254InstancesValidateRaw*(
+    publicInstances: ptr uint8,
+    publicInstancesLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_instances_validate".}
