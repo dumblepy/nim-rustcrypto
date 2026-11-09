@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "@dfinity/pic": "0.25.0",
+    "playwright": "1.65.0"
+  },
+  "name": "groth16-client-integration",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
+}

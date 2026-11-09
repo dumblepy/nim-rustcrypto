@@ -15,6 +15,7 @@ import ./algorithm/test_poseidon
 import ./algorithm/test_plonk
 import ./algorithm/test_plonky2
 when not defined(wasm32):
+  import ./algorithm/test_groth16_prover
   import ./algorithm/test_halo2
   import ./algorithm/test_zkp_scheme_separation
 import ./algorithm/test_p384

@@ -7,6 +7,35 @@ permissions:
   contents: read
 
 jobs:
+  groth16-client-integration:
+    name: Groth16 browser, Node, WASI and ICP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install WASM bridge generator
+        working-directory: rustcrypto-ffi
+        run: cargo install --locked wasm-bindgen-cli --version 0.2.129
+
+      - name: Install browser dependencies
+        working-directory: web/groth16-prover
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Generate client proofs and verify across runtimes
+        run: ./ci/test_groth16_web.sh
+
   # Linux x86_64 上の開発用 Docker イメージで、既存の test.sh（Rust + wasm/wasi クロスビルド + Nim）を実行する。
   linux-x86_64-docker-compose:
     name: Linux x86_64 (Docker)

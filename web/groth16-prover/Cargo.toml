@@ -1,0 +1,22 @@
+[package]
+name = "groth16-browser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ark-bn254 = "0.5"
+ark-ec = "0.5"
+ark-ff = "0.5"
+ark-groth16 = { version = "0.5", default-features = false, features = ["std"] }
+ark-r1cs-std = "0.5"
+ark-relations = "0.5"
+ark-serialize = "0.5"
+chacha20 = { version = "0.9", features = ["zeroize"] }
+getrandom = { version = "0.2", features = ["js"] }
+light-poseidon = "=0.4.1"
+rand_core = "0.6"
+wasm-bindgen = "=0.2.129"
+zeroize = "1.8"
+
+[lib]
+crate-type = ["cdylib"]

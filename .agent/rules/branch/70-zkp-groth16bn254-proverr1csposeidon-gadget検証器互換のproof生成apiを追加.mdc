@@ -1,0 +1,79 @@
+## 背景・目的
+
+[Issue #69](https://github.com/dumblepy/nim-rustcrypto/issues/69) / [実装ブランチ `69-設計-groth16plonkplonky2halo2のzkp検証機能をnimrust-ffiに追加`](https://github.com/dumblepy/nim-rustcrypto/tree/69-%E8%A8%AD%E8%A8%88-groth16plonkplonky2halo2%E3%81%AEzkp%E6%A4%9C%E8%A8%BC%E6%A9%9F%E8%83%BD%E3%82%92nimrust-ffi%E3%81%AB%E8%BF%BD%E5%8A%A0) はGroth16/BN254の**Verifier**とPoseidon/BN254を備える。一方、[docs/groth16-bn254.md](https://github.com/dumblepy/nim-rustcrypto/blob/69-%E8%A8%AD%E8%A8%88-groth16plonkplonky2halo2%E3%81%AEzkp%E6%A4%9C%E8%A8%BC%E6%A9%9F%E8%83%BD%E3%82%92nimrust-ffi%E3%81%AB%E8%BF%BD%E5%8A%A0/docs/groth16-bn254.md) は「**verifier only、proof生成・回路生成・trusted setupなし**」と明記する。`rustcrypto-ffi/examples/groth16_fixture.rs` にテスト用proof生成の例はあるが、汎用のProver公開APIではない。
+
+Shielded UTXO等でクライアントが秘密witnessからproofを作り、canisterの既存 `Groth16Bn254.verify(vk, proof, publicInputs)` で検証できるようにするため、**汎用的なProverと回路構築の足場**を追加する。**既存のIssue #69（Verifier）とは独立**して進める。ユースケース専用の送金回路は利用アプリで実装する。
+
+参照: [Synoria側 Shielded UTXO設計 #78](https://github.com/dumblepy/synoria-wallet/issues/78)。
+
+## 提案するスコープ
+
+1. **Groth16/BN254のproduction-oriented proving core**：arkworks 0.5系列で、承認済みR1CS circuit + private witness + proving key + public inputsからproofを生成。APIを単純な任意byte blob入力だけにせず、証明すべき回路とwitnessの対応を規定する。汎用circuit registration/typed builder、もしくはコンパイル済み回路adapterのいずれかをADRで固定。
+2. **BN254 Fr向けPoseidon R1CS gadget**：ブランチ既存 `PoseidonBn254.hash`（`light-poseidon` 0.4.1 `bn254_x5` / Circom互換 / 1..12入力 / 入力32byte canonical BE）と**回路内部で同一値になる**こと。width、round constants、domain separation、field encodingを固定し、cross-vectorで検証。
+3. **回路側の標準gadget**：Merkle membership/hash path、conditional select、秘密鍵→公開鍵/Nullifier PRFの拘束方法、u64/u128 range check、overflowを許さないbounded sum等、アプリが組み合わせられる安全な下位部品を整備（アプリ固有のNote schema/authorization policyはSynoria側）。
+4. **Proof serialization**：既存 `Groth16Bn254.verify` のv1形式に完全一致する **proof 256 bytes（G1 A=64、G2 B=128、G1 C=64）**、VK `RCG16V1\0`、ordered Fr publicInputs=32byte canonical BE。snarkjs/arkworksの生形式を無変換で渡せると仮定しない。
+5. **setup/key distribution**：回路固有trusted setupの外部ツールとproving/verifying keyの生成・固定・ハッシュ/バージョン管理。テスト用deterministic setupと本番セットアップを明確に分離。任意のユーザー提供VKを本番Verifierが自動承認しない。
+6. **Nim/Rust FFI + browser integration**：Rust側でproverライブラリと安全なC ABI/バッファ所有権・必要な鍵のロード/公開APIを提供。Web/Extension/MobileでのproverはJS/WASM bridgeまたは専用WebAssemblyモジュールを検討し、実際に動作するサンプルを用意。**静的archiveがwasm32でビルドできるだけではブラウザ実行可能とみなさない**。
+7. **セキュリティ・性能**：CSPRNGの安全な供給（client only、OS乱数前提の無検証採用禁止）、witness/PK size上限、secret zeroization、FFI panic封じ込め。ブラウザ/Node/Nim nativeの証明生成時間とpeak memory、WASI ICP内検証命令数とcyclesを測定。
+
+**非目標:** 任意の算術回路を自動で匿名送金回路に変換すること、Halo2/Plonky2/PLONKのProver追加、Zcashプロトコルとのバイト互換、アプリ側のReserveLot/資金管理。
+
+## 実装予定箇所（案）
+
+- `rustcrypto-ffi/src/groth16.rs` 既存Verifierと共存するProver入口、必要なら `groth16_prover.rs` を分離
+- `rustcrypto-ffi/src/poseidon.rs` と別のR1CS gadget module（BN254/Circom-compatible）
+- `src/rustcrypto/algorithm/groth16.nim` または `groth16_prover.nim`
+- `docs/groth16-bn254.md` のverifier/prover境界、trusted setupとwire format
+- `tests/algorithm/test_groth16.nim` / Rust unit/integration tests、Web/WASM smoke tests
+
+## 実装チェックリスト
+
+- [x] 既存Verifier#69とProverの役割/依存/APIをADRで定義
+- [x] BN254 Poseidonの回路内/回路外同一ハッシュを複数arity・既知ベクトルで確認
+- [x] R1CS gadget（Merkle membership、range checks、価値保存、Nullifier等）を実装/再利用
+- [x] Groth16 proving/setup/PK loading/proof exportのRust API + Nim FFIを提供
+- [x] proof 256byte / VK v1 / public inputs順序の互換・cross-fixtureテスト
+- [x] Browser proof generationの実動作とWASI verifierの実行テスト（ICP向け利用例を含む）
+- [x] 改ざんwitness、誤VK/回路、非正規Fr、range overflow、入力改変、乱数/資源枯渇の拒否・失敗ケース
+- [x] パフォーマンス閾値と監査/レビュー条件を定義
+
+## 受け入れ条件
+
+- 同一回路・同一公開入力について、**ブラウザクライアントが秘密witnessで生成した証明を、ブランチ#69由来の `Groth16Bn254.verify` で検証できる**。
+- wrong public inputs、false value preservation、false membership、unauthorized witnessから有効proofを生成できない。
+- `PoseidonBn254.hash` と回路内Poseidonが**固定したすべてのarity/domainで一致**。
+- test-only setup keysを誤って本番ビルド/生成物に同梱しない。
+
+既存ブランチのVerifier部分を再実装せず、これを土台に追加する。
+
+## 実装進捗・調査結果（2026-11-09）
+
+- ADR: `docs/adr/0070-groth16-prover.md`。回路は型付き命令ビルダーを採用。
+  `RCCIR01` で回路と public/private slot 順を固定し、`RCPK01` に回路を結び付ける。
+- Rust コア: `groth16_prover.rs`、C ABI: `groth16_prover_ffi.rs`。
+  Nim: `groth16_prover.nim`。既存 Verifier の実装・v1 wire format は変更しない。
+- Poseidon は light-poseidon 0.4.1 の定数/MDS を再利用。初期 domain tag は 0。
+  PRF の用途 domain は第一メッセージ要素として固定する。
+- Merkle、boolean select、u64/u128 range、overflow 不許可 bounded sum、PRF を提供。
+  Browser は共通コアだけを共有し、native C setup/prove 入口を含めない。
+- CSPRNG の失敗は拒否。所有する witness/seed を消去し、ChaCha20 state は zeroize。
+  Nim の caller-owned witness 用にも volatile write による clearWitness を提供。
+- OS CSPRNG を使う外部 setup ツールは回路/PK/VK の SHA3-256 manifest を作成する。
+  回路ファイルの指定にも対応。固定 seed はテスト専用で、鍵を配布物に同梱しない。
+- Chromium/Node が生成した proof を WASI の既存 Verifier と PocketIC で検証。
+  WASI と ICP は ABI が異なるため、IC は既存 Verifier ソースを直接共有する別 adapter とした。
+  IC adapter はビルド時の承認済み VK を必須にする。
+- 実測: browser 約 81 ms、Node 約 81 ms、Nim 約 11 ms、WASI 約 49 ms。
+  PocketIC 約 1.34 億 instructions / update 消費約 1.42 億 cycles。
+  詳細と peak RSS/linear memory の区別は `docs/groth16-prover-validation.md`。
+- Rust 既存 156 件、新規 6 件、Nim 全体および Browser/Node/WASI/ICP 実行を確認。
+  CI にクライアント proof のランタイム間検証ジョブを追加。
+
+### 本番に関する制約
+
+- setup ツールは開発用 single-party setup。MPC ceremony を実装したとは扱わない。
+- 上流 arkworks/FpVar、コンパイラ一時値、ホスト GC まで完全に消去する保証はない。
+- ブラウザ RSS は 10 ms サンプリングによるプロセスツリー合算で共有ページを含む。
+  PocketIC cycles はローカルの update 全体の観測値で、mainnet 料金を意味しない。
+- 本番回路の soundness/completeness、setup provenance、VK 承認、秘密消去・資源制御の
+  独立レビューを必要条件として ADR に記載。小規模デモの実測を本番性能とみなさない。

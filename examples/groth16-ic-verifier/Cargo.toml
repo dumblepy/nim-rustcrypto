@@ -1,0 +1,13 @@
+[package]
+name = "groth16-ic-verifier"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ark-bn254 = "0.5"
+ark-ec = "0.5"
+ark-ff = "0.5"
+ark-groth16 = { version = "0.5", default-features = false, features = ["std"] }
