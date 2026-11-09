@@ -1,0 +1,76 @@
+## 背景
+
+送信者が**受取人の公開view/encryption keyだけを使い**、Note平文を安全に暗号化し、ICP canisterには暗号文のみを記録する。
+
+指定ZKPブランチ [Issue #69](https://github.com/dumblepy/nim-rustcrypto/issues/69) はBN254/Poseidonと複数ZKP Verifierを追加するが、`rustcrypto-ffi/Cargo.toml`、`src/rustcrypto/algorithm` の確認範囲では **X25519鍵共有/HPKEの公開APIがない**。既存 `chacha20poly1305`, `hkdf` は対称暗号/KDFであり、受取人公開鍵のみで非対話的に暗号化する機能を単体では実現しない。
+
+## 目的・設計
+
+汎用の **X25519 + HKDF-SHA256 + AEAD（ChaCha20-Poly1305）** による暗号化/復号（可能なら標準RFC 9180 HPKE Base modeとして相互運用）をRust FFI/Nim APIとして提供する。名前・wire formatは準拠方式を確定してから固定する。独自プロトコルの即興設計を避ける。
+
+- 受取側: 公開暗号鍵 `pk_enc`、秘密復号鍵 `sk_enc`。支出鍵 `sk_spend` とは**独立**し、ドメイン分離して導出する場合は安全な方法を仕様化。
+- 送信側: `pk_enc` とCSPRNGからephemeral keyを生成し、`enc/epk || ciphertext || tag` を出力。受取側は `sk_enc` で復号し、公開`cm`を再計算して一致を確認できる。
+- AAD/contextに少なくともアプリ側 `protocol_version,pool_id,asset_id,commitment,output_index` を入れられるようにする（ライブラリは用途固有値をハードコードしない）。
+- X25519のsmall-order/低位点/全ゼロshared-secret等を拒否。AEAD nonce reuse防止、ephemeral public keyの検証、canonical serialization、失敗時のplaintext非開示、一定時間の秘密演算を考慮。
+- wire format (suite IDs, version, key encodings, nonce, AADとKDFラベル)を固定し、Rust↔Nim↔Browser JS/WASMと独立実装のRFC 9180テストベクトルで照合。
+- Secret keyはcanisterに渡さず、公開情報だけを渡す。FFIの呼び出し側バッファ管理、エラーハンドリング、secret zeroizationを徹底。
+- wasm32-wasip1のcanister側は**復号鍵を持たない**ため、プロトコル上必要なのは主にクライアント向けProver/Encrypt/Decrypt; Rust/Nimのビルド対応とBrowserでの実行確認は別々に検証。
+
+## API案（確定ではない）
+
+```nim
+type
+  NoteHpke* = object
+  NoteEncryptionPublicKey* = array[32, byte]
+  NoteEncryptionSecretKey* = array[32, byte]
+
+proc publicKey*(T: type NoteHpke, sk: NoteEncryptionSecretKey): NoteEncryptionPublicKey
+proc seal*(T: type NoteHpke, recipientPk: NoteEncryptionPublicKey,
+           plaintext, aad: openArray[byte]): seq[byte]
+proc open*(T: type NoteHpke, recipientSk: NoteEncryptionSecretKey,
+           sealed, aad: openArray[byte]): seq[byte]
+```
+
+公開APIは汎用HPKE等として命名してもよい（アプリケーション固有のNote/asset依存を入れない）。
+
+## 実装タスク
+
+- [x] RFC 9180 Base-mode HPKEの適用可能性とRust crates/保守・ライセンス/監査履歴を評価
+- [x] X25519のpublic/private/ephemeral鍵と安全なCSPRNG API
+- [x] HKDF/AEADを既存APIと整合する形で統合、context/AAD/domain separationを仕様化
+- [x] Nim/Rust FFI（C ABI、キー長、出力バッファ管理、サイズ上限、panic封じ込め）
+- [x] Rust/Nimの相互運用テスト、RFCの独立テストベクトル、改ざん/異常鍵/nonce再利用の負テスト
+- [x] Browser/WebExtension: Chromium と Manifest V3 worker で Nim/Rust ↔ hpke-js の双方向暗号化・復号を確認
+- [ ] Mobile 実機 runtime: Chromium Pixel 7 エミュレーションは通過。iOS/Android/React Native 実機は実行環境がなく未検証
+- [x] `docs/` に暗号スイート・wire format・バックアップ/鍵分離・利用例を公開
+
+## 受け入れ条件
+
+- 受取人の公開鍵しか知らない送信者が、受取人だけ復号できる暗号文を作れる。
+- 公開commitment等へのAADバインディングをアプリが指定でき、改ざん・誤鍵・異なるAADは必ず復号拒否。
+- ブラウザとNim/Rustが相互運用し、共有秘密・nonce・その他の内部秘密をログ/エラーへ出さない。
+
+**範囲外:** メモの暗号化以外のアプリ固有のNote schema、zNoteの所有権証明、ZK回路とMerkle/Nullifierの実装（これらはアプリケーション側または別issue）。
+
+## 調査結果・設計まとめ
+
+- RFC 9180 Base mode / suite `(0x0020, 0x0001, 0x0003)` を採用。汎用 `Hpke` marker type と `generateSecretKey/publicKey/seal/open/clearSecretKey` を公開。
+- wire は `enc[32] || ciphertext || tag[16]`。suite/version は API プロファイルに固定し、アプリ envelope で識別する。nonce は RFC key schedule の sequence 0 から導出し、各 seal で新しい ephemeral key を使用。
+- `info` と AAD は用途固有値を含まない任意バイト列。アプリ側の version/pool/asset/commitment/index を正規エンコードして渡す。Base mode は送信者認証やリプレイ防止を行わない。
+- Rust は hpke 0.13.0（MIT/Apache-2.0）、x25519-dalek 2 の zeroize feature を明示。0.15.1 の dalek 3 / AEAD 0.11 / rand_core 0.10 移行も調べ、既存 AEAD 0.10 系に合わせた。upstream は正式監査なし、旧0.8の Cloudflare 内部レビューのみで今回の監査保証ではない。
+- 公開鍵/enc は canonical u < 2^255-19 を必須とする。RFC 7748 の非正規入力受理より厳格。低位点は KEM の全ゼロ DH 拒否で処理。
+- 平文16 MiB、info/AAD各1 MiB。C ABI の出力は呼び出し元管理、失敗時は変更せず、復号作業領域を消去。panic と乱数エラーを status に変換。秘密鍵生成は OS CSPRNG。
+- 支出鍵からの導出を定義せず独立生成を採用。秘密鍵はクライアントでバックアップし、canister には渡さない。Nim のコピーや upstream の全スタック一時値の消去までは保証できない。
+- CFRG 公開ベクトルの `(mode,kem,kdf,aead)=(0,32,1,3)` を固定 fixture に保存。Rust の FFI encrypt/decrypt、Nim の FFI decrypt、別実装 hpke-js の browser/extension 双方向相互運用で照合。
+- Rust wasm32-unknown-unknown / wasm32-wasip1 は cargo check を実施。Rust WASM のブラウザ実行や Mobile 実機の実行確認とは区別する。
+- 利用例・C ABI・依存評価・鍵分離・検証範囲は `docs/hpke.md`、再現手順は `ci/test_hpke_web.sh`。
+
+
+## 検証結果
+
+- `cargo test --locked --lib`: 163件成功（HPKE 7件を含む）。公式ベクトルで FFI 暗号化・復号、乱数取得失敗時の出力非変更、panic 封じ込めを確認。
+- `nim c -r tests/test_algorithm.nim`: 245件成功。追加 API は直接モジュールと `import rustcrypto` の両方から確認。
+- `bash ci/test_hpke_web.sh`: Chromium / Pixel 7 viewport emulation / Manifest V3 extension worker で独立実装 hpke-js との相互運用成功。
+- zeroize 有効化後の wasm32-unknown-unknown / wasm32-wasip1 の `cargo check --locked --lib` 成功。
+- C ヘッダー構文検査、`git diff --check` 成功。
+- Mobile 実機と Rust WASM のブラウザ実行は未検証。エミュレーション・コンパイル検証の結果から実機対応を断定しない。

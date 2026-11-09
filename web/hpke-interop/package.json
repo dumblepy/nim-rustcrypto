@@ -1,0 +1,14 @@
+{
+  "name": "hpke-interop",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node smoke.cjs"
+  },
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "hpke-js": "1.8.1",
+    "playwright": "1.65.0"
+  }
+}

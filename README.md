@@ -23,6 +23,8 @@ requires "https://github.com/itsumura-h/nim-rustcrypto"
 
 On Linux x86_64, `nimble add` / `nimble install` automatically downloads and unpacks the Rust FFI static archive from GitHub Release, so normal consumers do not need Rust installed. Use `nimble fetchRustFfi` or `nimble buildRustFfiLocal` only when you need to refresh the archive during development.
 
+公開鍵による非対話暗号化: [RFC 9180 HPKE Base mode](docs/hpke.md) (`Hpke.generateSecretKey/publicKey/seal/open`)。
+
 ## Documentation
 
 Per-primitive and per-protocol guides (English):

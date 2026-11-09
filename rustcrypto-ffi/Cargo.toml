@@ -26,6 +26,7 @@ genshi-core = { version = "0.3.0", default-features = false, features = ["std", 
 genshi-math = "0.3.0"
 hkdf = "0.13.0"
 hmac = "0.13.0"
+hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
 k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "pem", "pkcs8", "schnorr"] }
 light-poseidon = "0.4.1"
 p256 = { version = "0.13.2", default-features = false, features = ["alloc", "ecdsa", "pem", "pkcs8"] }
@@ -35,11 +36,13 @@ pbkdf2 = "0.13.0"
 pem-rfc7468 = "1.0.0"
 plonky2 = { version = "1.6.0", package = "qp-plonky2", default-features = false, features = ["std"] }
 qp-plonky2-verifier = { version = "1.6.0", default-features = false, features = ["std"] }
-rand_core = { version = "0.6.4", default-features = false }
+rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
 rsa = { version = "0.9.8", default-features = false, features = ["pem", "sha2", "u64_digit"] }
 scrypt = "0.12.0"
 sha2 = "0.11.0"
 sha3 = "0.11.0"
+# hpke disables dalek default features; explicitly retain secret zeroization.
+x25519-dalek = { version = "2", default-features = false, features = ["zeroize", "static_secrets"] }
 x509-cert = "0.2.5"
 zeroize = "1.8"
 

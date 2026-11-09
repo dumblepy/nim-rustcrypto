@@ -1,3 +1,4 @@
+mod hpke;
 mod aead_common;
 mod aes_gcm;
 mod aes_gcm_siv;

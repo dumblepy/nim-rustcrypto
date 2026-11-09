@@ -31,3 +31,5 @@ import ./algorithm/test_secp256k1_ecdsa_der
 import ./algorithm/test_sha256
 import ./algorithm/test_sha3
 import ./algorithm/test_x509
+
+import ./algorithm/test_hpke
