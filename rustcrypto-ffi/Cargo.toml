@@ -11,9 +11,12 @@ ark-bn254 = "0.5.0"
 ark-ec = "0.5.0"
 ark-ff = "0.5.0"
 ark-groth16 = { version = "0.5.0", default-features = false, features = ["std"] }
+ark-r1cs-std = "0.5"
+ark-relations = "0.5"
 ark-serialize = "0.5.0"
 blake2 = "0.10.6"
 blst = "0.3.16"
+chacha20 = { version = "0.9", features = ["zeroize"] }
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
 const-oid = "0.9.6"
 digest = "0.11.2"
@@ -38,6 +41,7 @@ scrypt = "0.12.0"
 sha2 = "0.11.0"
 sha3 = "0.11.0"
 x509-cert = "0.2.5"
+zeroize = "1.8"
 
 [lib]
 name = "rust_crypto_ffi"

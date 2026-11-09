@@ -93,3 +93,5 @@ Build and test Rust from `rustcrypto-ffi`, Nim from the repository root (see pro
 ## License
 
 Use under **MIT** or **Apache-2.0**, at your option.
+
+Groth16/BN254 の回路構築と proof 生成: [Groth16 prover](docs/groth16-prover.md)。

@@ -2020,6 +2020,7 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-groth16",
+ "ark-r1cs-std",
  "ark-relations",
  "ark-serialize",
  "ark-snark",
@@ -2028,6 +2029,7 @@ dependencies = [
  "bincode",
  "blake2",
  "blst",
+ "chacha20",
  "chacha20poly1305",
  "const-oid 0.9.6",
  "digest 0.11.2",
@@ -2055,6 +2057,7 @@ dependencies = [
  "sha3 0.11.0",
  "snark-verifier",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]

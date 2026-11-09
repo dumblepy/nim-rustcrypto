@@ -1311,3 +1311,16 @@ when not defined(wasm32):
     publicInstances: ptr uint8,
     publicInstancesLen: csize_t,
   ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_instances_validate".}
+
+# Groth16 circuit-bound prover. Callbacks fill all requested bytes using a CSPRNG.
+type Groth16RandomCallback* = proc(output: ptr uint8; length: csize_t): cint {.cdecl.}
+proc groth16Bn254ProveRaw*(
+    circuit: ptr uint8; circuitLen: csize_t; key: ptr uint8; keyLen: csize_t;
+    publicInputs: ptr uint8; publicLen: csize_t; witness: ptr uint8; witnessLen: csize_t;
+    random: Groth16RandomCallback; output: ptr uint8; outputLen: csize_t
+  ): cint {.cdecl, importc: "rustcrypto_groth16_bn254_prove".}
+proc groth16Bn254SetupRaw*(
+    circuit: ptr uint8; circuitLen: csize_t; random: Groth16RandomCallback;
+    key: ptr uint8; keyCap: csize_t; keyLen: ptr csize_t;
+    vk: ptr uint8; vkCap: csize_t; vkLen: ptr csize_t
+  ): cint {.cdecl, importc: "rustcrypto_groth16_bn254_setup".}

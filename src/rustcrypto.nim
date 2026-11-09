@@ -10,6 +10,8 @@ import ./rustcrypto/algorithm/bls
 import ./rustcrypto/algorithm/bn254
 import ./rustcrypto/algorithm/poseidon
 import ./rustcrypto/algorithm/groth16
+when not defined(wasm32):
+  import ./rustcrypto/algorithm/groth16_prover
 import ./rustcrypto/algorithm/plonk
 import ./rustcrypto/algorithm/plonky2
 when not defined(wasm32):
@@ -34,6 +36,8 @@ export bls
 export bn254
 export poseidon
 export groth16
+when not defined(wasm32):
+  export groth16_prover
 export plonk
 export plonky2
 when not defined(wasm32):

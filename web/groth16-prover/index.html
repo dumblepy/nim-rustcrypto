@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Groth16 client proof demo</title>
+<body><button id="prove">Generate proof locally</button><pre id="result"></pre>
+<script type="module">
+import init, { prove } from './pkg/groth16_browser.js';
+const wasm = await init();
+if ('rustcrypto_groth16_bn254_setup' in wasm || 'rustcrypto_groth16_bn254_prove' in wasm) throw new Error('Unexpected native prover ABI export');
+const load = async name => {
+  const response = await fetch('./artifacts/' + name);
+  if (!response.ok) throw new Error('Missing development artifact: ' + name);
+  return new Uint8Array(await response.arrayBuffer());
+};
+const field = n => { const out = new Uint8Array(32); out[31] = n; return out; };
+window.runProof = async () => {
+  const [circuit, key, vk] = await Promise.all(['circuit.bin', 'proving-key.bin', 'verifying-key.bin'].map(load));
+  const inputs = field(9), witness = field(3);
+  const start = performance.now();
+  let proof;
+  try { proof = prove(circuit, key, inputs, witness); } finally { witness.fill(0); }
+  const ms = performance.now() - start;
+  let rejectsBadWitness = false;
+  const bad = field(4);
+  try { prove(circuit, key, inputs, bad); } catch { rejectsBadWitness = true; } finally { bad.fill(0); }
+  const secondWitness = field(3);
+  let proof2;
+  try { proof2 = prove(circuit, key, inputs, secondWitness); } finally { secondWitness.fill(0); }
+  let rejectsEntropyFailure = false;
+  const originalRandom = crypto.getRandomValues;
+  const entropyWitness = field(3);
+  try {
+    crypto.getRandomValues = () => { throw new Error('simulated entropy failure'); };
+    try { prove(circuit, key, inputs, entropyWitness); } catch { rejectsEntropyFailure = true; }
+  } finally { crypto.getRandomValues = originalRandom; entropyWitness.fill(0); }
+  if (!rejectsEntropyFailure) throw new Error('entropy fallback regression');
+  if (!rejectsBadWitness || proof.every((b, i) => b === proof2[i])) throw new Error('witness/randomness regression');
+  const result = { proof: Array.from(proof), vk: Array.from(vk), inputs: Array.from(inputs), ms,
+    wasmLinearMemoryHighWaterBytes: wasm.memory.buffer.byteLength, rejectsBadWitness, rejectsEntropyFailure };
+  document.querySelector('#result').textContent = JSON.stringify(result);
+  return result;
+};
+document.querySelector('#prove').onclick = () => window.runProof().catch(e => {
+  document.querySelector('#result').textContent = e.message;
+});
+</script></body></html>

@@ -28,14 +28,14 @@ Shielded UTXO等でクライアントが秘密witnessからproofを作り、cani
 
 ## 実装チェックリスト
 
-- [ ] 既存Verifier#69とProverの役割/依存/APIをADRで定義
-- [ ] BN254 Poseidonの回路内/回路外同一ハッシュを複数arity・既知ベクトルで確認
-- [ ] R1CS gadget（Merkle membership、range checks、価値保存、Nullifier等）を実装/再利用
-- [ ] Groth16 proving/setup/PK loading/proof exportのRust API + Nim FFIを提供
-- [ ] proof 256byte / VK v1 / public inputs順序の互換・cross-fixtureテスト
-- [ ] Browser proof generationの実動作とWASI verifierの実行テスト（ICP向け利用例を含む）
-- [ ] 改ざんwitness、誤VK/回路、非正規Fr、range overflow、入力改変、乱数/資源枯渇の拒否・失敗ケース
-- [ ] パフォーマンス閾値と監査/レビュー条件を定義
+- [x] 既存Verifier#69とProverの役割/依存/APIをADRで定義
+- [x] BN254 Poseidonの回路内/回路外同一ハッシュを複数arity・既知ベクトルで確認
+- [x] R1CS gadget（Merkle membership、range checks、価値保存、Nullifier等）を実装/再利用
+- [x] Groth16 proving/setup/PK loading/proof exportのRust API + Nim FFIを提供
+- [x] proof 256byte / VK v1 / public inputs順序の互換・cross-fixtureテスト
+- [x] Browser proof generationの実動作とWASI verifierの実行テスト（ICP向け利用例を含む）
+- [x] 改ざんwitness、誤VK/回路、非正規Fr、range overflow、入力改変、乱数/資源枯渇の拒否・失敗ケース
+- [x] パフォーマンス閾値と監査/レビュー条件を定義
 
 ## 受け入れ条件
 
@@ -45,3 +45,35 @@ Shielded UTXO等でクライアントが秘密witnessからproofを作り、cani
 - test-only setup keysを誤って本番ビルド/生成物に同梱しない。
 
 既存ブランチのVerifier部分を再実装せず、これを土台に追加する。
+
+## 実装進捗・調査結果（2026-11-09）
+
+- ADR: `docs/adr/0070-groth16-prover.md`。回路は型付き命令ビルダーを採用。
+  `RCCIR01` で回路と public/private slot 順を固定し、`RCPK01` に回路を結び付ける。
+- Rust コア: `groth16_prover.rs`、C ABI: `groth16_prover_ffi.rs`。
+  Nim: `groth16_prover.nim`。既存 Verifier の実装・v1 wire format は変更しない。
+- Poseidon は light-poseidon 0.4.1 の定数/MDS を再利用。初期 domain tag は 0。
+  PRF の用途 domain は第一メッセージ要素として固定する。
+- Merkle、boolean select、u64/u128 range、overflow 不許可 bounded sum、PRF を提供。
+  Browser は共通コアだけを共有し、native C setup/prove 入口を含めない。
+- CSPRNG の失敗は拒否。所有する witness/seed を消去し、ChaCha20 state は zeroize。
+  Nim の caller-owned witness 用にも volatile write による clearWitness を提供。
+- OS CSPRNG を使う外部 setup ツールは回路/PK/VK の SHA3-256 manifest を作成する。
+  回路ファイルの指定にも対応。固定 seed はテスト専用で、鍵を配布物に同梱しない。
+- Chromium/Node が生成した proof を WASI の既存 Verifier と PocketIC で検証。
+  WASI と ICP は ABI が異なるため、IC は既存 Verifier ソースを直接共有する別 adapter とした。
+  IC adapter はビルド時の承認済み VK を必須にする。
+- 実測: browser 約 81 ms、Node 約 81 ms、Nim 約 11 ms、WASI 約 49 ms。
+  PocketIC 約 1.34 億 instructions / update 消費約 1.42 億 cycles。
+  詳細と peak RSS/linear memory の区別は `docs/groth16-prover-validation.md`。
+- Rust 既存 156 件、新規 6 件、Nim 全体および Browser/Node/WASI/ICP 実行を確認。
+  CI にクライアント proof のランタイム間検証ジョブを追加。
+
+### 本番に関する制約
+
+- setup ツールは開発用 single-party setup。MPC ceremony を実装したとは扱わない。
+- 上流 arkworks/FpVar、コンパイラ一時値、ホスト GC まで完全に消去する保証はない。
+- ブラウザ RSS は 10 ms サンプリングによるプロセスツリー合算で共有ページを含む。
+  PocketIC cycles はローカルの update 全体の観測値で、mainnet 料金を意味しない。
+- 本番回路の soundness/completeness、setup provenance、VK 承認、秘密消去・資源制御の
+  独立レビューを必要条件として ADR に記載。小規模デモの実測を本番性能とみなさない。

@@ -1,5 +1,3 @@
-use core::ffi::c_int;
-
 mod aead_common;
 mod aes_gcm;
 mod aes_gcm_siv;
@@ -14,6 +12,8 @@ mod bn254;
 mod chacha20poly1305;
 mod ed25519;
 mod groth16;
+pub mod groth16_prover;
+pub mod groth16_prover_ffi;
 #[cfg(not(target_arch = "wasm32"))]
 mod halo2;
 mod hash;
@@ -41,33 +41,8 @@ mod x509;
 #[allow(unused_imports)]
 pub(crate) use bcrypt_wasm as bcrypt;
 
-pub const RUSTCRYPTO_OK: c_int = 0;
-pub const RUSTCRYPTO_ERR_NULL_OUTPUT: c_int = 1;
-pub const RUSTCRYPTO_ERR_OUTPUT_TOO_SHORT: c_int = 2;
-pub const RUSTCRYPTO_ERR_NULL_INPUT_WITH_DATA: c_int = 3;
-pub const RUSTCRYPTO_ERR_INVALID_SECRET_KEY: c_int = 4;
-pub const RUSTCRYPTO_ERR_INVALID_PUBLIC_KEY_FORMAT: c_int = 5;
-pub const RUSTCRYPTO_ERR_INVALID_MESSAGE_DIGEST: c_int = 6;
-pub const RUSTCRYPTO_ERR_INVALID_SIGNATURE: c_int = 7;
-pub const RUSTCRYPTO_ERR_VERIFICATION_FAILED: c_int = 8;
-pub const RUSTCRYPTO_ERR_INVALID_LENGTH: c_int = 9;
-pub const RUSTCRYPTO_ERR_INVALID_PRK_LENGTH: c_int = 10;
-pub const RUSTCRYPTO_ERR_AUTHENTICATION_FAILED: c_int = 11;
-pub const RUSTCRYPTO_ERR_INVALID_KEY_LENGTH: c_int = 12;
-pub const RUSTCRYPTO_ERR_INVALID_NONCE_LENGTH: c_int = 13;
-pub const RUSTCRYPTO_ERR_INVALID_TAG_LENGTH: c_int = 14;
-pub const RUSTCRYPTO_ERR_INVALID_PARAMETER: c_int = 15;
-pub const RUSTCRYPTO_ERR_INVALID_PASSWORD_HASH_FORMAT: c_int = 16;
-pub const RUSTCRYPTO_ERR_INVALID_CERTIFICATE: c_int = 17;
-pub const RUSTCRYPTO_ERR_DECRYPTION_FAILED: c_int = 18;
-pub const RUSTCRYPTO_ERR_RANDOM_FAILED: c_int = 19;
-pub const RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT: c_int = 20;
-pub const RUSTCRYPTO_ERR_INVALID_CURVE_POINT: c_int = 21;
-pub const RUSTCRYPTO_ERR_INVALID_PROOF_FORMAT: c_int = 22;
-pub const RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY: c_int = 23;
-pub const RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT: c_int = 24;
-pub const RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA: c_int = 25;
-pub const RUSTCRYPTO_ERR_PANIC: c_int = -1;
+mod status;
+pub use status::*;
 
 pub const SHA256_DIGEST_LEN: usize = 32;
 pub const HMAC_SHA256_MAC_LEN: usize = 32;

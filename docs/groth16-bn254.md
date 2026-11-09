@@ -6,6 +6,9 @@ Verifies **Groth16 proofs over BN254** with `ark-groth16` 0.5.0 and `ark-bn254` 
 This module is a **verifier only**; it does not generate proofs, circuits, or trusted
 setup parameters.
 
+Circuit construction and proof generation are available separately through
+[`Groth16Bn254Prover`](groth16-prover.md). The verifier wire format remains unchanged.
+
 ## API
 
 ```nim
