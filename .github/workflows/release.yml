@@ -173,7 +173,7 @@ jobs:
           generate_release_notes: true
 
   build-release-macos-arm64:
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout repository
