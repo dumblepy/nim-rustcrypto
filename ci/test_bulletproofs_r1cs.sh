@@ -7,8 +7,10 @@ artifacts="$(cd "$artifacts" && pwd)"
 echo "Bulletproofs R1CS PoC artifacts: $artifacts"
 
 cd "$repo_root/rustcrypto-ffi"
-# Keep PoC archives out of the default build and release directories.
-export CARGO_TARGET_DIR="$artifacts/target"
+# Use an isolated target directory by default. CI supplies the shared ZKP directory.
+cargo_target_dir="${CARGO_TARGET_DIR:-$artifacts/target}"
+mkdir -p "$cargo_target_dir"
+export CARGO_TARGET_DIR="$(cd "$cargo_target_dir" && pwd)"
 export CC_wasm32_unknown_unknown="${CC_wasm32_unknown_unknown:-clang}"
 export CC_wasm32_wasip1="${CC_wasm32_wasip1:-clang}"
 feature=bulletproofs-r1cs-poc
@@ -26,7 +28,9 @@ if grep -q '^bulletproofs v' "$artifacts/default-dependencies.txt"; then
   echo "Experimental dependency found in the default build" >&2
   exit 1
 fi
-rustup target add wasm32-unknown-unknown wasm32-wasip1
+if [[ "${ZKP_RUST_WASM_TARGETS_INSTALLED:-0}" != "1" ]]; then
+  rustup target add wasm32-unknown-unknown wasm32-wasip1
+fi
 cargo test --locked --release --features "$feature" --lib bulletproofs_r1cs
 cargo test --locked --release --features "$feature" --test bulletproofs_r1cs
 cargo build --locked --release --features "$feature" --lib --example bulletproofs_r1cs_interop
