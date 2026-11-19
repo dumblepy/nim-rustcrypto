@@ -466,6 +466,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bulletproofs"
+version = "5.0.1"
+source = "git+https://github.com/zkcrypto/bulletproofs?rev=04bce4e66013ff857ed462fd4206210544101461#04bce4e66013ff857ed462fd4206210544101461"
+dependencies = [
+ "byteorder",
+ "clear_on_drop",
+ "curve25519-dalek",
+ "digest 0.10.7",
+ "group",
+ "merlin",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_derive",
+ "sha3 0.10.9",
+ "subtle",
+ "thiserror",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -537,6 +557,15 @@ dependencies = [
  "block-buffer 0.12.0",
  "crypto-common 0.2.1",
  "inout 0.2.2",
+]
+
+[[package]]
+name = "clear_on_drop"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38508a63f4979f0048febc9966fadbd48e5dab31fd0ec6a3f151bbf4a74f7423"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -710,7 +739,10 @@ dependencies = [
  "curve25519-dalek-derive",
  "digest 0.10.7",
  "fiat-crypto",
+ "group",
+ "rand_core 0.6.4",
  "rustc_version",
+ "serde",
  "subtle",
  "zeroize",
 ]
@@ -2065,9 +2097,11 @@ dependencies = [
  "bincode",
  "blake2",
  "blst",
+ "bulletproofs",
  "chacha20",
  "chacha20poly1305",
  "const-oid 0.9.6",
+ "curve25519-dalek",
  "digest 0.11.2",
  "ed25519",
  "ed25519-dalek",
@@ -2079,6 +2113,7 @@ dependencies = [
  "hpke",
  "k256",
  "light-poseidon",
+ "merlin",
  "p256",
  "p384",
  "password-hash 0.6.1",
@@ -2093,6 +2128,7 @@ dependencies = [
  "sha2 0.11.0",
  "sha3 0.11.0",
  "snark-verifier",
+ "wasm-bindgen",
  "x25519-dalek",
  "x509-cert",
  "zeroize",

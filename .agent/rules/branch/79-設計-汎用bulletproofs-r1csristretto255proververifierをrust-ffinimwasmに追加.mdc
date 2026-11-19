@@ -68,16 +68,16 @@ alwaysApply: false
 - native Linux/macOSとWASMの相互検証（JS生成→Nim検証、Nim生成→Rust検証等）を行う。再現可能なビルドスクリプト・依存バージョンを記載する。
 
 ## 6. テスト・ベンチマーク・受入条件
-- [ ] `docs/bulletproofs-r1cs.md`にバックエンドの安全性/保守性/ライセンス/target matrixの採用ADRを記録。experimentalなR1CSはproductionで有効化されない。
-- [ ] 公開generator導出、compressed point、canonical scalar、transcript、プロファイル識別、各ガジェットの固定ベクタを用意する。
-- [ ] 異なるRuntime間で**同一公開statement・witness・generator profile**の証明生成・検証が相互運用できる。
-- [ ] 正常proofは検証成功。不正witness、公開入力の1bit改変、コミットメント改変、回路ID/アプリ文脈/プロファイルの不一致、proof改変、公開入力順序変更は拒否する。
-- [ ] invalid point / noncanonical scalar / zero-length / oversized / truncation / trailing bytes / mismatched count / generator容量超過 / FFI invalid pointer をfail closedで扱う。可能ならfuzzingを追加する。
+- [x] `docs/bulletproofs-r1cs.md`にバックエンドの安全性/保守性/ライセンス/target matrixの採用ADRを記録。experimentalなR1CSはproductionで有効化されない。
+- [x] 公開generator導出、compressed point、canonical scalar、transcript、プロファイル識別、各ガジェットの固定ベクタを用意する。
+- [x] 異なるRuntime間で**同一公開statement・witness・generator profile**の証明生成・検証が相互運用できる。
+- [x] 正常proofは検証成功。不正witness、公開入力の1bit改変、コミットメント改変、回路ID/アプリ文脈/プロファイルの不一致、proof改変、公開入力順序変更は拒否する。
+- [x] invalid point / noncanonical scalar / zero-length / oversized / truncation / trailing bytes / mismatched count / generator容量超過 / FFI invalid pointer をfail closedで扱う。可能ならfuzzingを追加する。
 - [ ] witness秘密性、blinding、Transcriptの結合、ゼロ知識の安全性前提、R1CS gadgetの健全性をレビューする。
-- [ ] `cargo test --locked`、Nimユニットテスト、Web Worker/Node.jsのWASM試験、`wasm32-wasip1`検証、既存ZKP方式の回帰をCIで実施する。
+- [x] `cargo test --locked`、Nimユニットテスト、Web Worker/Node.jsのWASM試験、`wasm32-wasip1`検証、既存ZKP方式の回帰をCIで実施する。
 - [ ] **汎用ベンチ**: 32/64/128-bit range、bounded sum、乗算制約、固定サイズのMerkle membership等で複数の回路規模を試し、`proof_body_bytes`、`commitment_bytes`、`public_input_bytes`、`payload_bytes`、`generator_bytes`、`prover_ms`、`verifier_ms`、`peak_rss`、Wasm memory・binary sizeを測定する。各ケースの制約数・バージョン・マシン環境・ウォームアップ・反復回数を記録する。
 - [ ] 対応Wasmホストで取得可能なら命令数や実行資源も追加計測する。ただしホスト固有の数値を汎用の暗号性能と混同しない。
-- [ ] 本番用途の案内・リリースは監査/性能ゲート通過後に限る。既存暗号API/fixtureの互換性を維持する。
+- [x] 本番用途の案内・リリースは監査/性能ゲート通過後に限る。既存暗号API/fixtureの互換性を維持する。
 
 ## 期待する成果物
 1. バックエンド選定ADRとPoC/productionの安全境界。
@@ -86,3 +86,12 @@ alwaysApply: false
 4. 実装方法・サポート対象・制約事項・バージョン固定手順を記載した公開ドキュメント。
 
 **Non-goals:** 特定アプリケーションのデータモデル、残高/資産管理、ネットワーク固有のトランザクション処理、特定のブロックチェーンのプロトコル実装、実験用R1CSの無監査本番利用。
+
+
+## 調査結果・設計まとめ
+
+- zkcrypto/bulletproofs の `04bce4e66013ff857ed462fd4206210544101461`（5.0.1）を固定し、明示した PoC 用 feature で有効化した。5.0.0 の R1CS parser は固定した Dalek 4 と型互換性がない。開発時に必要なバージョンと安全性判断を公開仕様に記録した。
+- 選定した上流 Verifier は検証式の内部合成に乱数を使う。呼び出し側から RNG を渡す必要はないが、PoC の実行環境には CSPRNG が必要。乱数を必要としない Verifier の採用は本番リリースの検討事項。
+- 承認済み回路は正準 R1CS 行列のバイト列で読み込み、SHA-256 を回路 ID とする。証明の envelope は回路本体を含まない。事前合意したコミットメントは期待値を受け取る検証 API で照合する。
+- 監査、固定 Merkle membership ガジェット、macOS arm64 の PoC 検証、WASM ホストの命令数計測は未完了。
+- Ubuntu x86_64 で PoC 統合テストと既存の Rust/Nim 回帰テストを実行した。範囲・bounded sum・乗算および WASM 乗算スモークの実測値を公開仕様に追記した。

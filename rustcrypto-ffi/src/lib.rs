@@ -1,3 +1,7 @@
+#[cfg(feature = "bulletproofs-r1cs-poc")]
+pub mod bulletproofs_r1cs;
+#[cfg(feature = "bulletproofs-r1cs-poc")]
+mod bulletproofs_r1cs_ffi;
 mod hpke;
 mod aead_common;
 mod aes_gcm;
