@@ -1,35 +1,44 @@
-import std/[os, strutils]
+import std/os
 
-const rustCryptoResolveScript = currentSourcePath.parentDir.parentDir / "tools" / "resolve_rustcrypto_ffi.nim"
-
-when defined(linux) and defined(amd64):
-  const rustCryptoTargetArg = "linux-x86_64"
-elif defined(wasi) or defined(rustcryptoWasi):
-  const rustCryptoTargetArg = "wasm32-wasip1"
-elif defined(wasm32):
-  const rustCryptoTargetArg = "wasm32-unknown-unknown"
-elif defined(macosx) and defined(arm64):
-  const rustCryptoTargetArg = "macos-arm64"
-elif defined(macosx):
-  {.error: "rustcrypto FFI on macOS is supported only on Apple Silicon (arm64). macOS x86_64 is not supported.".}
+when defined(rustcryptoBulletproofsR1csPoc):
+  const rustCryptoBulletproofsArchive {.strdefine.} = ""
+  when rustCryptoBulletproofsArchive.len == 0:
+    {.error: "Set -d:rustCryptoBulletproofsArchive=/absolute/path/to/librust_crypto_ffi.a built with bulletproofs-r1cs-poc.".}
+  const rustCryptoStaticLib* = rustCryptoBulletproofsArchive
+  {.passL: quoteShell(rustCryptoStaticLib).}
 else:
-  {.error: "rustcrypto FFI static archive currently supports only Linux x86_64, macOS arm64, wasm32-unknown-unknown, and wasm32-wasip1.".}
+  import std/strutils
 
-const rustCryptoStaticLib* = staticExec(
-  "nim r --hints:off --warnings:off " & rustCryptoResolveScript & " -- " & rustCryptoTargetArg
-).strip
+  const rustCryptoResolveScript = currentSourcePath.parentDir.parentDir / "tools" / "resolve_rustcrypto_ffi.nim"
 
-when rustCryptoStaticLib.len == 0:
   when defined(linux) and defined(amd64):
-    {.error: "rustcrypto FFI static archive is not available for Linux x86_64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`.".}
-  elif defined(macosx) and defined(arm64):
-    {.error: "rustcrypto FFI static archive is not available for macOS arm64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`, or place the macos-arm64 vendor/cache archive before compiling.".}
+    const rustCryptoTargetArg = "linux-x86_64"
   elif defined(wasi) or defined(rustcryptoWasi):
-    {.error: "rustcrypto FFI static archive is not available for wasm32-wasip1. Run `nimble fetchRustFfi` from `/application`, or place the wasm32-wasip1 vendor/cache archive before compiling.".}
+    const rustCryptoTargetArg = "wasm32-wasip1"
   elif defined(wasm32):
-    {.error: "rustcrypto FFI static archive is not available for wasm32-unknown-unknown. Run `nimble fetchRustFfi` from `/application`, or place the vendor/cache archive before compiling.".}
+    const rustCryptoTargetArg = "wasm32-unknown-unknown"
+  elif defined(macosx) and defined(arm64):
+    const rustCryptoTargetArg = "macos-arm64"
+  elif defined(macosx):
+    {.error: "rustcrypto FFI on macOS is supported only on Apple Silicon (arm64). macOS x86_64 is not supported.".}
+  else:
+    {.error: "rustcrypto FFI static archive currently supports only Linux x86_64, macOS arm64, wasm32-unknown-unknown, and wasm32-wasip1.".}
 
-{.passL: rustCryptoStaticLib.}
+  const rustCryptoStaticLib* = staticExec(
+    "nim r --hints:off --warnings:off " & rustCryptoResolveScript & " -- " & rustCryptoTargetArg
+  ).strip
+
+  when rustCryptoStaticLib.len == 0:
+    when defined(linux) and defined(amd64):
+      {.error: "rustcrypto FFI static archive is not available for Linux x86_64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`.".}
+    elif defined(macosx) and defined(arm64):
+      {.error: "rustcrypto FFI static archive is not available for macOS arm64. Run `nimble fetchRustFfi` or `nimble buildRustFfiLocal` from `/application`, or place the macos-arm64 vendor/cache archive before compiling.".}
+    elif defined(wasi) or defined(rustcryptoWasi):
+      {.error: "rustcrypto FFI static archive is not available for wasm32-wasip1. Run `nimble fetchRustFfi` from `/application`, or place the wasm32-wasip1 vendor/cache archive before compiling.".}
+    elif defined(wasm32):
+      {.error: "rustcrypto FFI static archive is not available for wasm32-unknown-unknown. Run `nimble fetchRustFfi` from `/application`, or place the vendor/cache archive before compiling.".}
+
+  {.passL: rustCryptoStaticLib.}
 
 # arkworks/light-poseidon/genshi pull in num-integer, which may call libm functions.
 # The archive must precede this flag, hence a second `-lm` after the static library.
@@ -1343,3 +1352,24 @@ proc hpkeOpenRaw*(key: ptr uint8, keyLen: csize_t,
   {.importc: "rustcrypto_hpke_open", cdecl.}
 proc hpkeClearSecretKeyRaw*(key: ptr uint8, keyLen: csize_t): cint
   {.importc: "rustcrypto_hpke_clear_secret_key", cdecl.}
+
+when defined(rustcryptoBulletproofsR1csPoc):
+  proc bulletproofsR1csProveRaw*(
+      circuit: ptr byte; circuitLen: csize_t;
+      publicInputs: ptr byte; publicLen: csize_t;
+      witness: ptr byte; witnessLen: csize_t;
+      blindings: ptr byte; blindingsLen: csize_t;
+      context: ptr byte; contextLen: csize_t;
+      output: ptr byte; capacity: csize_t;
+  ): cint {.cdecl, importc: "rustcrypto_bulletproofs_r1cs_prove".}
+
+  proc bulletproofsR1csVerifyRaw*(
+      circuit: ptr byte; circuitLen: csize_t;
+      publicInputs: ptr byte; publicLen: csize_t;
+      context: ptr byte; contextLen: csize_t;
+      proof: ptr byte; proofLen: csize_t;
+  ): cint {.cdecl, importc: "rustcrypto_bulletproofs_r1cs_verify".}
+
+  proc bulletproofsR1csValidateRaw*(
+      kind: uint32; data: ptr byte; len: csize_t;
+  ): cint {.cdecl, importc: "rustcrypto_bulletproofs_r1cs_validate".}

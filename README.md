@@ -76,6 +76,7 @@ Per-primitive and per-protocol guides (English):
 - [Plonky2 / Goldilocks / FRI verifier](docs/plonky2.md)
 - [Halo2 KZG / BN254 verifier (PSE/Axiom SHPLONK profile)](docs/halo2.md)
 - [ZKP verifier dependencies, licenses, and target matrix](docs/zkp-dependencies.md)
+- [Bulletproofs R1CS / Ristretto255 prover and verifier (opt-in PoC)](docs/bulletproofs-r1cs.md)
 
 ### High-level protocol helpers
 

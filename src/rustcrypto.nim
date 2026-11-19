@@ -52,3 +52,7 @@ export jwt
 
 import ./rustcrypto/algorithm/hpke
 export hpke
+
+when defined(rustcryptoBulletproofsR1csPoc):
+  import ./rustcrypto/algorithm/bulletproofs_r1cs
+  export bulletproofs_r1cs

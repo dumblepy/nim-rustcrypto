@@ -16,9 +16,11 @@ ark-relations = "0.5"
 ark-serialize = "0.5.0"
 blake2 = "0.10.6"
 blst = "0.3.16"
+bulletproofs = { git = "https://github.com/zkcrypto/bulletproofs", rev = "04bce4e66013ff857ed462fd4206210544101461", version = "5.0.1", features = ["yoloproofs"], optional = true }
 chacha20 = { version = "0.9", features = ["zeroize"] }
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
 const-oid = "0.9.6"
+curve25519-dalek = { version = "=4.1.3", optional = true }
 digest = "0.11.2"
 ed25519 = { version = "2.2.3", default-features = false, features = ["alloc", "pem", "pkcs8"] }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc", "pkcs8", "signature", "zeroize"] }
@@ -29,6 +31,7 @@ hmac = "0.13.0"
 hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
 k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "pem", "pkcs8", "schnorr"] }
 light-poseidon = "0.4.1"
+merlin = { version = "=3.0.0", optional = true }
 p256 = { version = "0.13.2", default-features = false, features = ["alloc", "ecdsa", "pem", "pkcs8"] }
 p384 = { version = "0.13.1", default-features = false, features = ["alloc", "ecdsa", "pem", "pkcs8"] }
 password-hash = { version = "0.6.1", default-features = false, features = ["alloc", "phc"] }
@@ -59,9 +62,25 @@ snark-verifier = { version = "0.2.7", default-features = false }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wasm-bindgen = { version = "=0.2.129", optional = true }
+
 [dev-dependencies]
 ark-relations = "0.5"
 ark-snark = "0.5"
 ark-std = "0.5"
 genshi-core = { version = "0.3.0", default-features = false, features = ["std", "math-native", "prover"] }
 rand = "0.8"
+
+[features]
+bulletproofs-r1cs-poc = ["dep:bulletproofs", "dep:curve25519-dalek", "dep:merlin"]
+bulletproofs-r1cs-web-poc = ["bulletproofs-r1cs-poc", "dep:wasm-bindgen"]
+
+[[example]]
+name = "bulletproofs_r1cs_web"
+crate-type = ["cdylib"]
+required-features = ["bulletproofs-r1cs-web-poc"]
+
+[[example]]
+name = "bulletproofs_r1cs_interop"
+required-features = ["bulletproofs-r1cs-poc"]
