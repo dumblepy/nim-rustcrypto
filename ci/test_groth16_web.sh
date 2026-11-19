@@ -10,8 +10,10 @@ cargo build --locked --release --example groth16_verify_stdin --target wasm32-wa
 cargo build --locked --release --manifest-path ../web/groth16-prover/Cargo.toml --target wasm32-unknown-unknown --target-dir target
 wasm-bindgen target/wasm32-unknown-unknown/release/groth16_browser.wasm --target web --out-dir ../web/groth16-prover/pkg
 cd "$repo_root/web/groth16-prover"
-npm ci
-npx playwright install chromium
+if [[ "${GROTH16_BROWSER_DEPS_INSTALLED:-0}" != "1" ]]; then
+  npm ci
+  npx playwright install chromium
+fi
 node smoke.cjs "$artifacts" "$repo_root/rustcrypto-ffi/target/wasm32-wasip1/release/examples/groth16_verify_stdin.wasm" "$artifacts/measurements.json"
 cd "$repo_root/rustcrypto-ffi"
 GROTH16_APPROVED_VK="$artifacts/verifying-key.bin" cargo build --locked --release --manifest-path ../examples/groth16-ic-verifier/Cargo.toml --target wasm32-unknown-unknown --target-dir target

@@ -7,10 +7,10 @@ permissions:
   contents: read
 
 jobs:
-  groth16-client-integration:
-    name: Groth16 browser, Node, WASI and ICP
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+  zkp-integration:
+    name: ZKP integration (Groth16 and Bulletproofs R1CS)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -23,6 +23,12 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Install Nim toolchain
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install WASM bridge generator
         working-directory: rustcrypto-ffi
         run: cargo install --locked wasm-bindgen-cli --version 0.2.129
@@ -33,13 +39,32 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Generate client proofs and verify across runtimes
+      - name: Test Groth16 across browser, Node, WASI and ICP
+        id: groth16
+        env:
+          GROTH16_BROWSER_DEPS_INSTALLED: "1"
         run: ./ci/test_groth16_web.sh
+
+      - name: Test Bulletproofs R1CS across Nim, Node, Worker and WASI
+        id: bulletproofs
+        if: ${{ !cancelled() && (steps.groth16.outcome == 'success' || steps.groth16.outcome == 'failure') }}
+        run: ./ci/test_bulletproofs_r1cs.sh "$RUNNER_TEMP/bulletproofs-r1cs"
+
+      - name: Upload Bulletproofs R1CS measurements
+        if: ${{ !cancelled() && steps.bulletproofs.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulletproofs-r1cs-poc-measurements
+          path: |
+            ${{ runner.temp }}/bulletproofs-r1cs/environment.txt
+            ${{ runner.temp }}/bulletproofs-r1cs/native-measurements.csv
+            ${{ runner.temp }}/bulletproofs-r1cs/native-rss.txt
+            ${{ runner.temp }}/bulletproofs-r1cs/wasm-measurements.json
 
   # Linux x86_64 上の開発用 Docker イメージで、既存の test.sh（Rust + wasm/wasi クロスビルド + Nim）を実行する。
   linux-x86_64-docker-compose:
     name: Linux x86_64 (Docker)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout repository
@@ -82,36 +107,3 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           ./test.sh
-
-  bulletproofs-r1cs-poc:
-    name: Bulletproofs R1CS PoC (Nim, Node, Worker and WASI)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-      - uses: jiro4989/setup-nim-action@v2
-        with:
-          nim-version: "2.2.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install wasm-bindgen CLI
-        working-directory: rustcrypto-ffi
-        run: cargo install --locked wasm-bindgen-cli --version 0.2.129
-      - name: Install Chromium and its dependencies
-        working-directory: web/groth16-prover
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-      - name: Test the opt-in archive across runtimes
-        run: ./ci/test_bulletproofs_r1cs.sh "$RUNNER_TEMP/bulletproofs-r1cs"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bulletproofs-r1cs-poc-measurements
-          path: |
-            ${{ runner.temp }}/bulletproofs-r1cs/environment.txt
-            ${{ runner.temp }}/bulletproofs-r1cs/native-measurements.csv
-            ${{ runner.temp }}/bulletproofs-r1cs/native-rss.txt
-            ${{ runner.temp }}/bulletproofs-r1cs/wasm-measurements.json
