@@ -1,0 +1,88 @@
+---
+description: 79-設計-汎用bulletproofs-r1csristretto255proververifierをrust-ffinimwasmに追加 ブランチでの開発時に読み込む
+alwaysApply: false
+---
+## 背景・目的
+`nim-rustcrypto` に、**trusted setup（秘密のtrapdoor、SRS、ceremony）を必要としない汎用Bulletproofs R1CSのProver/Verifier** を追加する。
+
+特定のアプリケーションや取引方式に依存せず、Nim/Rust/JavaScriptから次の用途に使用できる独立した暗号ライブラリを目指す。
+
+- 任意の**事前定義されたR1CS制約系**に対するゼロ知識証明の生成・検証
+- 数値範囲、等式、線形・乗算制約、コミットメントの開示知識、秘密値間の関係などの汎用的な制約
+- native環境とWASM環境での相互運用、および証明サイズ・生成/検証性能の比較計測
+
+既存の`rustcrypto-ffi/src/groth16.rs`、`groth16_prover.rs`、`groth16_prover_ffi.rs`、`src/rustcrypto/algorithm/{groth16,groth16_prover,ffi}.nim`、`ci/test_groth16_web.sh`を既存FFI/API/CIの実装例とする。既存のGroth16/PLONK/Halo2/Plonky2 APIには非互換変更を加えない。
+
+## セキュリティ前提・採用ゲート
+- `zkcrypto/bulletproofs` / dalek系の汎用R1CS（`yoloproofs`）は**experimental / unsuitable for deployment**と明記されている。RangeProofの実績を汎用R1CSの本番安全性と同一視しない。
+- **PoC用実装と本番利用可能な実装を区別**する。実験的バックエンドを使う場合はdev-only feature/別バイナリに隔離し、production buildに混入させない。監査・レビュー可能で保守された実装が確認できない場合は本番リリースを停止する。
+- Bulletproofs R1CSは一般にVerifier計算量が乗算ゲート数に対して線形に増加するため、証明サイズの短さだけで採否を判断しない。
+- Ristretto255のスカラー体はBN254 Frとは異なる。**同じ32バイト長でも値・エンディアン・ハッシュ・証明を相互運用できない**。既存ZKP方式とは明確に型/APIを分離する。
+- Proofサイズの例示や「2 KiB以下」は達成保証ではない。**証明本体と外部コミットメント/公開入力を含む総wire bytesを両方測定**する。
+
+参考:
+- https://github.com/dalek-cryptography/bulletproofs （R1CSのexperimentalに関する警告）
+- https://docs.rs/bulletproofs/5.0.0/bulletproofs/
+- https://doc.dalek.rs/bulletproofs/r1cs/index.html
+
+## 1. 暗号バックエンドの選定（最初の成果物）
+1. `zkcrypto/bulletproofs`と保守されている代替fork/実装を比較する。安全性（健全性/ゼロ知識性）、監査・外部レビュー、メンテナンス、ライセンス、依存バージョン、native/WASMサポート、性能を文書化する。
+2. 汎用R1CS（ProverとVerifierの両方を提供すること）を必須条件とする。**RangeProof専用実装では代替しない**。
+3. Rustの依存とバージョンを`Cargo.lock`で固定し、セキュリティadvisory・破壊的API変更を確認する。
+4. 独自に暗号プロトコルを改変する必要がある場合は、その理由、セキュリティ上の影響、外部監査の要否をADRに記録する。要件を満たす実装がなければPoC止まりとする。
+
+## 2. 暗号プロファイル、生成器、Transcript
+仮の実装プロファイル: `bulletproofs-r1cs-ristretto255-v1`（正式名称は仕様確定時に固定）。
+
+- 群はprime-order Ristretto255、スカラー値は**canonical 32-byte little-endian**、群要素は32-byte compressed Ristrettoとする。正準性、identity、decompression失敗の扱いを固定する。
+- Pedersen generatorsとBulletproofs generatorsは**公開・再現可能なパラメータから導出**する。秘密のSRSやtrusted ceremonyを設けない。導出方法、独立したドメイン、generator容量/aggregation、serialization、version/hashを仕様化する。
+- Merlin transcript / Fiat–Shamirを使用し、`protocol_id`、`proof_system_version`、`circuit_id`、`generator_profile_hash`、`application_context`、**順序づけされた公開入力と公開コミットメント**を長さ付きで結合する。任意のアプリケーション文脈（domain tag、network、session等）を呼び出し側が指定できる設計とし、ドメイン分離とリプレイ耐性の責任範囲を明記する。
+- 回路定義、generator profile、上限値は**証明者から渡された非信頼データで自動的に変更しない**。呼び出し側が承認した`circuit_id`と登録済み制約生成器を選択する。
+- Prover/Verifierで**同一制約系・公開入力順序・線形結合の符号**を再現する。gadgetの共通化、回路固定ハッシュ、version migration方針を設計する。
+- 公開入力・非公開witness・Pedersen commitment・blinding factorの型を分ける。秘密witness/乱数をproofやログに露出しない。公開コミットメントはproof本体と区別して送受信・計測する。
+
+## 3. 汎用R1CS APIとガジェット
+### 目標API（PoCで型・関数名を確定）
+- Rust内部API: `CircuitDefinition`（固定の制約系）、`Witness`、`PublicInputs`、`Commitments`、`Proof`を明確に区別。
+- Nim API案:
+  - `BulletproofsR1csProver.prove(profile, circuitId, publicInputs, witness, rng): ProofWithCommitments`
+  - `BulletproofsR1cs.verify(profile, circuitId, publicInputs, commitments, proof): bool`
+  - `validateProof`、`validatePublicInputs`、`validateCommitments`等の明確な失敗API。
+- 低水準の可変R1CS builderを提供する場合も、**検証者がローカルで承認した回路仕様を再現**する形に限定。untrusted proofから任意の制約/実行可能コードを構築しない。
+- ガジェット: `range (32/64/128-bit)`、`equality`、`bounded sum`、`multiplication`、`Pedersen commitment opening`、必要なら`Merkle membership`（使うハッシュを明記した汎用例）。
+- **有限体上のwraparoundと整数範囲の違い**を厳密に扱う。中間和や積がフィールドのmodulo演算だけで意図せず成立しないよう、必要な範囲拘束をAPI/サンプルに含める。
+
+## 4. Rust FFI / Nim API / wire format
+- `rustcrypto-ffi/src/bulletproofs_r1cs.rs`（または同等）、`src/rustcrypto/algorithm/bulletproofs_r1cs.nim`、`src/rustcrypto/algorithm/ffi.nim`に実装を追加する。既存Rust `staticlib`/`rlib`の出力を維持する。
+- C ABI案: `rustcrypto_bulletproofs_r1cs_prove`、`rustcrypto_bulletproofs_r1cs_verify`、`..._validate`。バッファ長/容量、所有権、エラーコード、panic境界を仕様化する。
+- wire形式は`magic, version, profile, circuit-id, proof-body, commitments`を明確に識別する（外部envelopeと暗号proof本体の区別も文書化）。公開入力は個数/順序/エンディアン/長さを固定、正準エンコード以外は拒否。すべての可変長領域に明示的上限とtrailing-bytes拒否を設ける。
+- malformed encoding / null pointer / OOB / 非canonical scalar・point / 超過長 / 誤profileはエラー。構造的に妥当だが数学的に無効な証明は`verify=false`とする。
+- generator capacity・制約数・乗算ゲート数・public inputs・commitments・proof bytesに明示的な上限を設定し、OOM・リソース枯渇を抑止する。
+- 秘密witnessとblinding factorの不要なコピーを避け、best-effort zeroizeを実装する。乱数はOS/ブラウザのCSPRNG由来とし、デモ用の固定乱数を本番利用しない。Verifierは乱数不要。
+- Nim側はポインタを直接操作させない型安全ラッパーを実装する。既存`Groth16`等とは証明型・モジュール・エラーを分離する。
+
+## 5. プラットフォーム対応
+- Linux x86_64・macOS arm64・`wasm32-unknown-unknown`（JS/ブラウザ）・`wasm32-wasip1`（WASI等の組み込みホスト）をターゲット候補とし、実際にサポートできるfeature matrixをCIで明記する。
+- JavaScript側は`wasm-bindgen`等を利用して、公開入力とwitnessを受け取りローカルでProverを呼び出せるAPIを提供。Web Worker/Node.js互換性、メモリ、timeout、CSP、artifact hashなどを検証する。
+- WASI/Wasm環境でVerifierのリンク・起動・性能を測定。各ホスト固有の命令数/実行コストは**汎用APIではなくベンチツールの測定項目**として扱う。
+- native Linux/macOSとWASMの相互検証（JS生成→Nim検証、Nim生成→Rust検証等）を行う。再現可能なビルドスクリプト・依存バージョンを記載する。
+
+## 6. テスト・ベンチマーク・受入条件
+- [ ] `docs/bulletproofs-r1cs.md`にバックエンドの安全性/保守性/ライセンス/target matrixの採用ADRを記録。experimentalなR1CSはproductionで有効化されない。
+- [ ] 公開generator導出、compressed point、canonical scalar、transcript、プロファイル識別、各ガジェットの固定ベクタを用意する。
+- [ ] 異なるRuntime間で**同一公開statement・witness・generator profile**の証明生成・検証が相互運用できる。
+- [ ] 正常proofは検証成功。不正witness、公開入力の1bit改変、コミットメント改変、回路ID/アプリ文脈/プロファイルの不一致、proof改変、公開入力順序変更は拒否する。
+- [ ] invalid point / noncanonical scalar / zero-length / oversized / truncation / trailing bytes / mismatched count / generator容量超過 / FFI invalid pointer をfail closedで扱う。可能ならfuzzingを追加する。
+- [ ] witness秘密性、blinding、Transcriptの結合、ゼロ知識の安全性前提、R1CS gadgetの健全性をレビューする。
+- [ ] `cargo test --locked`、Nimユニットテスト、Web Worker/Node.jsのWASM試験、`wasm32-wasip1`検証、既存ZKP方式の回帰をCIで実施する。
+- [ ] **汎用ベンチ**: 32/64/128-bit range、bounded sum、乗算制約、固定サイズのMerkle membership等で複数の回路規模を試し、`proof_body_bytes`、`commitment_bytes`、`public_input_bytes`、`payload_bytes`、`generator_bytes`、`prover_ms`、`verifier_ms`、`peak_rss`、Wasm memory・binary sizeを測定する。各ケースの制約数・バージョン・マシン環境・ウォームアップ・反復回数を記録する。
+- [ ] 対応Wasmホストで取得可能なら命令数や実行資源も追加計測する。ただしホスト固有の数値を汎用の暗号性能と混同しない。
+- [ ] 本番用途の案内・リリースは監査/性能ゲート通過後に限る。既存暗号API/fixtureの互換性を維持する。
+
+## 期待する成果物
+1. バックエンド選定ADRとPoC/productionの安全境界。
+2. 汎用Bulletproofs R1CSの仕様（profile、generator、transcript、gadget、wire形式）とRust FFI/Nim API。
+3. Native/Node.js/Browser/WASI向けの相互運用fixtureと再現可能なベンチマーク結果。
+4. 実装方法・サポート対象・制約事項・バージョン固定手順を記載した公開ドキュメント。
+
+**Non-goals:** 特定アプリケーションのデータモデル、残高/資産管理、ネットワーク固有のトランザクション処理、特定のブロックチェーンのプロトコル実装、実験用R1CSの無監査本番利用。
