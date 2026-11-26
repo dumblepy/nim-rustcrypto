@@ -10,7 +10,9 @@ use crate::{
 #[cfg(feature = "profile")]
 use ark_std::{end_timer, start_timer};
 use ff::{Field, PrimeField, WithSmallOrderMulGroup};
-use multicore::{IntoParallelIterator, ParallelIterator};
+use multicore::IntoParallelIterator;
+#[cfg(feature = "multicore")]
+use multicore::ParallelIterator;
 
 use super::{ConstraintSystem, Expression};
 

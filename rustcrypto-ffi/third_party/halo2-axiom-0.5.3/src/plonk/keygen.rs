@@ -16,13 +16,15 @@ use super::{
 use crate::{
     arithmetic::{parallelize, CurveAffine},
     circuit::Value,
-    multicore::{IntoParallelIterator, ParallelIterator},
+    multicore::IntoParallelIterator,
     poly::{
         batch_invert_assigned,
         commitment::{Blind, Params},
         EvaluationDomain,
     },
 };
+#[cfg(feature = "multicore")]
+use crate::multicore::ParallelIterator;
 
 pub(crate) fn create_domain<C, ConcreteCircuit>(
     k: u32,

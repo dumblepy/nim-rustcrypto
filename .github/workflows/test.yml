@@ -73,6 +73,10 @@ jobs:
             ${{ runner.temp }}/bulletproofs-r1cs/native-rss.txt
             ${{ runner.temp }}/bulletproofs-r1cs/wasm-measurements.json
 
+      - name: Check vendored halo2-axiom builds without warnings
+        if: ${{ !cancelled() }}
+        run: ./ci/check_halo2_axiom_warnings.sh
+
       - name: Test Halo2 KZG/BN254 native and WASM fixture smoke
         id: halo2
         if: ${{ !cancelled() }}

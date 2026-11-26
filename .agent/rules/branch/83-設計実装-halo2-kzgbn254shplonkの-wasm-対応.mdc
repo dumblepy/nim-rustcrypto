@@ -226,8 +226,12 @@ error: The multicore feature flag is not supported on wasm32 architectures witho
 ### 11.2 採用方針: B（最小パッチ）
 
 - `rustcrypto-ffi/third_party/halo2-axiom-0.5.3` に crates.io 0.5.3 を vendoring。
-- 変更は `Cargo.toml` / `Cargo.toml.orig` の default feature から `multicore` を外す
-  1 行のみ。`.rs` は無変更。
+- 必須変更は `Cargo.toml` / `Cargo.toml.orig` の default feature から `multicore` を外す
+  1 行。
+- 追加で warning cleanup を実施: `thread-safe-region` feature の宣言、
+  `cargo fix` による lifetime/未使用 import 修正、native/wasm の cfg 分離、
+  deprecated `GenericArray::as_slice` の置換、未使用 `PointIndex` の削除。
+  詳細は `third_party/PATCH.md`。
 - `[patch.crates-io]` で path を指定し、`Cargo.lock` を更新。
 - native は `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` で
   `halo2-axiom = { features = ["multicore"] }` を明示し、並列性能を維持。
@@ -298,7 +302,24 @@ CI 追補: Groth16 / Bulletproofs R1CS と同じ役割分担に揃えた。
 example smoke は重複実行しない。native Halo2 の Rust/Nim テストは `test.sh`
 （Linux Docker / macOS ジョブ）側で引き続き実行される。
 
-### 11.6 Nim wasm link の扱い
+### 11.6 halo2-axiom の warning 対策
+
+`cargo fix --lib -p halo2-axiom` を vendored crate に適用し、機械修正可能な
+lifetime / 未使用 import / no-op attribute を修正した。加えて、native と wasm で
+必要 import が異なるため `cfg(feature = "multicore")` で分離し、未宣言だった
+`thread-safe-region` を Cargo.toml に追加、deprecated `GenericArray::as_slice` と
+未使用 `PointIndex` を手動修正した。
+
+実行場所の方針:
+
+- ローカル修正: `ci/fix_halo2_axiom_warnings.sh`
+  （`cargo fix` 適用 + native/両 wasm の `-D warnings` 検査）
+- CI 検査: `ci/check_halo2_axiom_warnings.sh`
+  （`cargo fix` は実行せず、native/両 wasm で `-D warnings` を強制）
+- `.github/workflows/test.yml` の `ZKP integration` ジョブで CI 検査を実行。
+  CI で `cargo fix` を実行すると作業ツリーを書き換えるため、適用はローカルに限定。
+
+### 11.7 Nim wasm link の扱い
 
 このリポジトリの既存 CI には Nim の wasm 実行ターゲットがない（Nim 2.2 の OS 一覧に
 `wasip1` がなく、`--os:standalone` は std/strutils 等を満たさない）。そのため

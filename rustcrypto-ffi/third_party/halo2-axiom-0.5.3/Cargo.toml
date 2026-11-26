@@ -71,6 +71,7 @@ gadget-traces = ["backtrace"]
 multicore = ["maybe-rayon/threads"]
 profile = ["dep:ark-std"]
 sanity-checks = []
+thread-safe-region = []
 test-dev-graph = [
     "dev-graph",
     "plotters/bitmap_backend",

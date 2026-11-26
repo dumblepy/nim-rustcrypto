@@ -9,7 +9,9 @@ use std::iter;
 
 #[cfg(feature = "multicore")]
 use crate::multicore::IndexedParallelIterator;
-use crate::multicore::{IntoParallelIterator, ParallelIterator};
+#[cfg(feature = "multicore")]
+use crate::multicore::ParallelIterator;
+use crate::multicore::IntoParallelIterator;
 use std::collections::HashMap;
 
 use super::witness::{build_instance_single, AdviceCommitted, InstanceSingle};

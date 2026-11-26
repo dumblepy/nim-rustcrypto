@@ -11,7 +11,9 @@ use std::ops::RangeTo;
 
 #[cfg(feature = "multicore")]
 use crate::multicore::IndexedParallelIterator;
-use crate::multicore::{IntoParallelIterator, ParallelIterator};
+#[cfg(feature = "multicore")]
+use crate::multicore::ParallelIterator;
+use crate::multicore::IntoParallelIterator;
 
 use super::{
     circuit::{

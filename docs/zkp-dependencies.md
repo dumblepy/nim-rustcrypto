@@ -49,9 +49,11 @@ verified through the C ABI on both wasm targets (`ci/test_halo2_wasm.sh`). Other
 runtimes and wasm performance were not measured; do not extend the claim beyond the
 executed hosts listed in `docs/halo2.md`.
 
-`halo2-axiom` 0.5.3 is vendored with a one-line default-feature change (remove
-`multicore`) so wasm can build without atomics. See
-`rustcrypto-ffi/third_party/PATCH.md` for provenance, diff, and update steps.
+`halo2-axiom` 0.5.3 is vendored with a default-feature change (remove `multicore`)
+so wasm can build without atomics, plus warning-only cleanups. See
+`rustcrypto-ffi/third_party/PATCH.md` for provenance, the exact change list, and
+update steps. `ci/check_halo2_axiom_warnings.sh` enforces `-D warnings` for native
+and both wasm targets in the `ZKP integration` job.
 
 ## Native smoke benchmark (indicative only)
 

@@ -169,8 +169,10 @@ Upstream `halo2-axiom` 0.5.3 enables its `multicore` feature by default, which i
 compile error on wasm32 without atomics. This repository vendors the crate at
 `rustcrypto-ffi/third_party/halo2-axiom-0.5.3` with only the default feature list
 changed (`multicore` removed); see `rustcrypto-ffi/third_party/PATCH.md` for the exact
-diff, checksum, license, and update procedure. Native builds re-enable `multicore`
-through a target-specific dependency, so native verification keeps the parallel path.
+diff, checksum, license, and update procedure. The vendored copy also carries
+warning-only cleanups; `ci/check_halo2_axiom_warnings.sh` enforces `-D warnings` for
+native and both wasm targets in CI. Native builds re-enable `multicore` through a
+target-specific dependency, so native verification keeps the parallel path.
 The verifier's execution path needs no entropy, OS I/O, filesystem, clock, or WASI
 syscalls. `rayon` 1.12+ supplies a single-threaded fallback on wasm for the remaining
 direct `rayon` uses in the dependency graph.

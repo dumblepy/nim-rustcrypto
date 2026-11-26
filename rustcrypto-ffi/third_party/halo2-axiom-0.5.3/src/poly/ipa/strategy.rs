@@ -105,7 +105,6 @@ impl<'params, C: CurveAffine>
     ///
     /// Returns `false` if *some* proof was invalid. If the caller needs to identify
     /// specific failing proofs, it must re-process the proofs separately.
-    #[must_use]
     fn finalize(self) -> bool {
         self.msm.check()
     }
@@ -146,7 +145,6 @@ impl<'params, C: CurveAffine>
     ///
     /// Returns `false` if *some* proof was invalid. If the caller needs to identify
     /// specific failing proofs, it must re-process the proofs separately.
-    #[must_use]
     fn finalize(self) -> bool {
         unreachable!()
     }

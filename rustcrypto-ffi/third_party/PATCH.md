@@ -33,10 +33,12 @@ enables `halo2-axiom`'s `multicore` feature for
 | License | MIT OR Apache-2.0 |
 | Local path | `rustcrypto-ffi/third_party/halo2-axiom-0.5.3` |
 
-Source files are otherwise byte-for-byte the crates.io 0.5.3 package (copied
-from the Cargo registry cache). Only the two feature-list lines below differ.
+The package was copied from the Cargo registry cache. The default-feature
+change below is required for wasm; the warning cleanups keep native and both
+wasm targets at zero warnings. Run
+`git diff -- rustcrypto-ffi/third_party/halo2-axiom-0.5.3` for the exact diff.
 
-## Diff
+## Diff: wasm-safe defaults
 
 ```diff
 --- upstream Cargo.toml (normalized)
@@ -55,7 +57,32 @@ from the Cargo registry cache). Only the two feature-list lines below differ.
 +default = ["batch", "circuit-params"]
 ```
 
-No `.rs` file is modified. `multicore` remains an opt-in feature.
+`multicore` remains an opt-in feature. Native builds select it explicitly.
+
+## Diff: warning cleanup
+
+`cargo fix --lib -p halo2-axiom` applied the lifetime/import/unused-attribute
+fixes; the cross-target and non-machine-applicable warnings were fixed manually.
+
+| File | Change |
+|---|---|
+| `Cargo.toml` / `Cargo.toml.orig` | Declare the already-referenced `thread-safe-region` feature (upstream had it commented out) |
+| `src/multicore.rs` | Drop the unused `Scope` re-export; cfg-gate `ParallelIterator` / `IntoParallelRefMutIterator` |
+| `src/plonk/evaluation.rs`, `src/plonk/keygen.rs`, `src/plonk/prover.rs`, `src/plonk/witness.rs` | cfg-gate `ParallelIterator` imports to `multicore` |
+| `src/plonk/vanishing/verifier.rs`, `src/poly/ipa/commitment.rs` | Explicit elided lifetimes |
+| `src/poly/ipa/strategy.rs` | Remove no-op `#[must_use]` on trait impl methods |
+| `src/transcript.rs` | Replace deprecated `GenericArray::as_slice()` with slice indexing |
+| `src/plonk/circuit.rs` | Remove unused `PointIndex`; allow the intentionally retained `queried_selectors` debug field |
+
+Warning policy:
+
+- Local: `ci/fix_halo2_axiom_warnings.sh` applies `cargo fix` and immediately
+  runs the warning check.
+- CI: `ci/check_halo2_axiom_warnings.sh` runs
+  `cargo rustc -p halo2-axiom --lib -- -D warnings` for native and both wasm
+  targets. It is wired into the `ZKP integration` job.
+- CI does not run `cargo fix` (it would mutate the tree). Apply fixes locally,
+  review, and commit.
 
 ## Update procedure
 
@@ -63,17 +90,18 @@ No `.rs` file is modified. `multicore` remains an opt-in feature.
    fixed v1 profile in `docs/halo2.md`.
 2. Copy the new `halo2-axiom-<version>` package from the Cargo registry into
    `rustcrypto-ffi/third_party/`.
-3. Apply the same `default` feature edit (remove `multicore`) and update this
-   document with the new checksum and commit.
-4. Keep `halo2-axiom = { features = ["multicore"] }` in the native
+3. Apply the `default` feature edit (remove `multicore`) and declare
+   `thread-safe-region = []` as above.
+4. Run `ci/fix_halo2_axiom_warnings.sh`, review the diff, and update this
+   document with the new checksum/commit.
+5. Keep `halo2-axiom = { features = ["multicore"] }` in the native
    `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` section.
-5. Run `cargo build --locked --lib` for native, `wasm32-unknown-unknown`, and
-   `wasm32-wasip1`, then `ci/test_halo2_wasm.sh`.
+6. Run `ci/check_halo2_axiom_warnings.sh`, then `ci/test_halo2_wasm.sh`.
 
 ## Upstream contribution
 
-The change is a candidate for an upstream issue: "provide a wasm-safe default
-feature set or document `default-features = false` for halo2-axiom". Upstream
+The default-feature change and warning fixes are candidates for upstream
+issues/PRs: "provide a wasm-safe default feature set", "declare
+thread-safe-region", and "clean up Rust 2024/new-lint warnings". Upstream
 already has the sequential code path; only the default feature choice blocks
-transitive consumers such as `halo2-base` (which depends on `halo2-axiom` with
-default features enabled).
+transitive consumers such as `halo2-base`.

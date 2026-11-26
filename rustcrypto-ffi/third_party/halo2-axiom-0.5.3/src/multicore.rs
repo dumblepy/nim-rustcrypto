@@ -7,10 +7,13 @@ compile_error!(
     "The multicore feature flag is not supported on wasm32 architectures without atomics"
 );
 
-pub use maybe_rayon::{
-    iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator},
-    join, scope, Scope,
-};
+pub use maybe_rayon::{iter::IntoParallelIterator, join, scope};
+
+#[cfg(feature = "multicore")]
+pub use maybe_rayon::iter::ParallelIterator;
+
+#[cfg(any(feature = "multicore", feature = "thread-safe-region"))]
+pub use maybe_rayon::iter::IntoParallelRefMutIterator;
 
 #[cfg(feature = "multicore")]
 pub use maybe_rayon::{

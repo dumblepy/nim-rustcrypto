@@ -58,7 +58,7 @@ symbol_report="$artifacts/symbols.txt"
 "$llvm_nm" --version | head -n 1 > "$symbol_report"
 for archive in "${archives[@]}"; do
   [[ -s "$archive" ]] || { echo "missing archive: $archive" >&2; exit 1; }
-  defined="$("$llvm_nm" --defined-only -g "$archive" | awk '{print $NF}')"
+  defined="$("$llvm_nm" --defined-only -g "$archive" 2>/dev/null | awk '{print $NF}')"
   for symbol in "${symbols[@]}"; do
     if ! grep -qx "$symbol" <<<"$defined"; then
       echo "missing $symbol in $archive" >&2

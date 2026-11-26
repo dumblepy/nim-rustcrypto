@@ -102,7 +102,7 @@ test-dev-graph = [
     "plotters/ttf",
 ]
 gadget-traces = ["backtrace"]
-# thread-safe-region = []
+thread-safe-region = []
 sanity-checks = []
 batch = ["rand/getrandom"]
 profile = ["dep:ark-std"]
