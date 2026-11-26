@@ -106,16 +106,52 @@ Tests cover successful verification plus modified instances, modified proofs, mo
 params, truncated/trailing blobs, wrong column layouts, and non-canonical instance
 values. A Rust unit test verifies the committed fixture directly.
 
+The same fixture is exercised through the C ABI by
+`rustcrypto-ffi/examples/halo2_verify.rs` and
+`rustcrypto-ffi/examples/halo2_verify_web.rs`:
+
+| Target | How it is executed | Result |
+|---|---|---|
+| Native Linux x86_64 | `cargo run --example halo2_verify` | positive + negative checks pass |
+| `wasm32-wasip1` | `wasm32-wasip1` example under Node 24 `node:wasi` | positive + negative checks pass |
+| `wasm32-unknown-unknown` | cdylib example instantiated by Node 24 `WebAssembly` | positive + negative checks pass |
+
+`ci/test_halo2_wasm.sh` builds both archives, checks the four Halo2 symbols with
+`llvm-nm`, and runs the native and both wasm smoke tests. The wasm runtimes above are
+the environments this repository actually executes; other wasm hosts are not claimed.
+
+Measured raw archive sizes in this build: `wasm32-unknown-unknown` 33,112,418 bytes,
+`wasm32-wasip1` 32,204,876 bytes. wasm verification timing and memory were not measured.
+
 ## Target support
 
-- Native Linux x86_64 and macOS arm64: supported.
-- `wasm32-unknown-unknown` / `wasm32-wasip1`: **not supported**.
-  `halo2-axiom` unconditionally uses Rayon parallel iterators that do not compile for
-  these targets. The Rust module is compiled only for non-wasm targets; importing
-  `rustcrypto/algorithm/halo2` on wasm produces a clear compile-time error.
+| Target | Build | Execute |
+|---|---|---|
+| Linux x86_64 | yes | yes (Nim + Rust tests) |
+| macOS arm64 | yes | yes (Nim + Rust tests) |
+| `wasm32-unknown-unknown` | yes | yes (fixture smoke in Node `WebAssembly`) |
+| `wasm32-wasip1` | yes | yes (fixture smoke in Node WASI) |
 
-The repository's wasm archives therefore do not export `rustcrypto_halo2_*` symbols.
-Do not advertise Halo2 verification on wasm.
+Both wasm archives export the four `rustcrypto_halo2_kzg_bn254_*` symbols. The Nim
+marker API (`Halo2KzgBn254.verify` and the `validate*` helpers) resolves to these
+symbols on wasm targets, including through the umbrella `rustcrypto` module. The
+executed wasm smoke tests above call the Rust C ABI directly; a Nim-generated wasm
+executable was not built or run in this repository.
+
+### wasm build note (vendored patch)
+
+Upstream `halo2-axiom` 0.5.3 enables its `multicore` feature by default, which is a hard
+compile error on wasm32 without atomics. This repository vendors the crate at
+`rustcrypto-ffi/third_party/halo2-axiom-0.5.3` with only the default feature list
+changed (`multicore` removed); see `rustcrypto-ffi/third_party/PATCH.md` for the exact
+diff, checksum, license, and update procedure. Native builds re-enable `multicore`
+through a target-specific dependency, so native verification keeps the parallel path.
+The verifier's execution path needs no entropy, OS I/O, filesystem, clock, or WASI
+syscalls. `rayon` 1.12+ supplies a single-threaded fallback on wasm for the remaining
+direct `rayon` uses in the dependency graph.
+
+The wasm profile is sequential. Proof verification, transcript, KZG pairing, subgroup
+checks, and public-input binding are unchanged.
 
 ## Security notes
 
@@ -126,3 +162,9 @@ Do not advertise Halo2 verification on wasm.
 - `snark-verifier` / `halo2-axiom` are not audited by this project.
 - The API verifies the pairing equation and PLONK constraints; it does not prove that
   the circuit represents a meaningful application statement.
+- Both wasm targets use `panic = "abort"`, so `catch_unwind` cannot turn a panic into an
+  error code. Input length, canonical field, curve/subgroup, and instance-shape checks
+  run before the proof-system library; malformed params/VK/proof/instances return the
+  documented status codes or `false`, not a panic. Because the verifying key is a
+  trusted input, a deliberately malformed-but-structurally-plausible protocol is still
+  trusted and should be validated/pinned at the application boundary.

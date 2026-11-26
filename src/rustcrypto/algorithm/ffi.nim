@@ -1294,32 +1294,31 @@ proc plonky2CommonValidateRaw*(
     commonCircuitDataLen: csize_t,
   ): cint {.cdecl, importc: "rustcrypto_plonky2_common_validate".}
 
-when not defined(wasm32):
-  proc halo2KzgBn254VerifyRaw*(
-    params: ptr uint8,
-    paramsLen: csize_t,
-    verifyingKey: ptr uint8,
-    verifyingKeyLen: csize_t,
-    proof: ptr uint8,
-    proofLen: csize_t,
-    publicInstances: ptr uint8,
-    publicInstancesLen: csize_t,
-  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_verify".}
+proc halo2KzgBn254VerifyRaw*(
+  params: ptr uint8,
+  paramsLen: csize_t,
+  verifyingKey: ptr uint8,
+  verifyingKeyLen: csize_t,
+  proof: ptr uint8,
+  proofLen: csize_t,
+  publicInstances: ptr uint8,
+  publicInstancesLen: csize_t,
+): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_verify".}
 
-  proc halo2KzgBn254ParamsValidateRaw*(
-    params: ptr uint8,
-    paramsLen: csize_t,
-  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_params_validate".}
+proc halo2KzgBn254ParamsValidateRaw*(
+  params: ptr uint8,
+  paramsLen: csize_t,
+): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_params_validate".}
 
-  proc halo2KzgBn254VkValidateRaw*(
-    verifyingKey: ptr uint8,
-    verifyingKeyLen: csize_t,
-  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_vk_validate".}
+proc halo2KzgBn254VkValidateRaw*(
+  verifyingKey: ptr uint8,
+  verifyingKeyLen: csize_t,
+): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_vk_validate".}
 
-  proc halo2KzgBn254InstancesValidateRaw*(
-    publicInstances: ptr uint8,
-    publicInstancesLen: csize_t,
-  ): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_instances_validate".}
+proc halo2KzgBn254InstancesValidateRaw*(
+  publicInstances: ptr uint8,
+  publicInstancesLen: csize_t,
+): cint {.cdecl, importc: "rustcrypto_halo2_kzg_bn254_instances_validate".}
 
 # Groth16 circuit-bound prover. Callbacks fill all requested bytes using a CSPRNG.
 type Groth16RandomCallback* = proc(output: ptr uint8; length: csize_t): cint {.cdecl.}

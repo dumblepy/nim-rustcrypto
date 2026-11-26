@@ -183,8 +183,13 @@ fn parse_protocol(bytes: &[u8]) -> Result<PlonkProtocol<G1Affine>, c_int> {
         .deserialize(&bytes[HALO2_KZG_BN254_VK_V1_HEADER_LEN..])
         .map_err(|_| RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY)?;
 
+    // Use u64 for the sum so a hostile 32-bit `usize` count cannot overflow
+    // (and panic under debug builds) on wasm32.
+    let total_instance_values = protocol.num_instance.iter().try_fold(0u64, |total, &count| {
+        total.checked_add(count as u64)
+    });
     if protocol.num_instance.len() > HALO2_KZG_BN254_MAX_INSTANCE_COLUMNS
-        || protocol.num_instance.iter().sum::<usize>() > HALO2_KZG_BN254_MAX_INSTANCE_VALUES
+        || total_instance_values.is_none_or(|total| total > HALO2_KZG_BN254_MAX_INSTANCE_VALUES as u64)
         || protocol.num_witness.len() > HALO2_KZG_BN254_MAX_INSTANCE_COLUMNS
         || protocol.preprocessed.len() > 4096
     {

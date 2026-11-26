@@ -76,6 +76,41 @@ jobs:
           cargo build --release --lib --target wasm32-wasip1
           test -s target/wasm32-wasip1/release/librust_crypto_ffi.a
 
+      # Halo2 verifier の C ABI symbol が配布 archive に含まれることを確認する。
+      - name: Install LLVM tools for symbol inspection
+        run: sudo apt-get update && sudo apt-get install -y llvm
+
+      - name: Verify Halo2 FFI symbols in release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm_nm="$(command -v llvm-nm || true)"
+          if [ -z "$llvm_nm" ]; then
+            llvm_nm="$(find /usr/lib/llvm-*/bin -type f -name llvm-nm | head -n 1)"
+          fi
+          test -n "$llvm_nm"
+          symbols=(
+            rustcrypto_halo2_kzg_bn254_verify
+            rustcrypto_halo2_kzg_bn254_params_validate
+            rustcrypto_halo2_kzg_bn254_vk_validate
+            rustcrypto_halo2_kzg_bn254_instances_validate
+          )
+          archives=(
+            rustcrypto-ffi/target/release/librust_crypto_ffi.a
+            rustcrypto-ffi/target/wasm32-unknown-unknown/release/librust_crypto_ffi.a
+            rustcrypto-ffi/target/wasm32-wasip1/release/librust_crypto_ffi.a
+          )
+          for archive in "${archives[@]}"; do
+            defined="$("$llvm_nm" --defined-only -g "$archive" | awk '{print $NF}')"
+            for symbol in "${symbols[@]}"; do
+              if ! grep -qx "$symbol" <<<"$defined"; then
+                echo "missing $symbol in $archive" >&2
+                exit 1
+              fi
+            done
+            echo "$(basename "$archive"): all Halo2 symbols present"
+          done
+
       # 生成物を Nim パッケージの vendor 配置へ同期し、同封物としても利用できることを確認する。
       - name: Sync Rust static library to Nim vendor tree
         run: |

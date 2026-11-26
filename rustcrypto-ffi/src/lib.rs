@@ -19,8 +19,10 @@ mod ed25519;
 mod groth16;
 pub mod groth16_prover;
 pub mod groth16_prover_ffi;
-#[cfg(not(target_arch = "wasm32"))]
-mod halo2;
+// Public (hidden) so the native/WASI fixture smoke example can call the same
+// C ABI entry points that the Nim wrapper links against.
+#[doc(hidden)]
+pub mod halo2;
 mod hash;
 mod hkdf;
 mod hmac;
@@ -133,9 +135,6 @@ pub const PLONK_BN254_VK_V1_LEN: usize = plonk_bn254::PLONK_BN254_VK_V1_LEN;
 pub const PLONK_BN254_PROOF_V1_MIN_LEN: usize = plonk_bn254::PLONK_BN254_PROOF_V1_MIN_LEN;
 pub const PLONK_BN254_MAX_PUBLIC_INPUTS: usize = plonk_bn254::PLONK_BN254_MAX_PUBLIC_INPUTS;
 pub const PLONKY2_MAX_BLOB_LEN: usize = plonky2::PLONKY2_MAX_BLOB_LEN;
-#[cfg(not(target_arch = "wasm32"))]
 pub const HALO2_KZG_BN254_PARAMS_V1_LEN: usize = halo2::HALO2_KZG_BN254_PARAMS_V1_LEN;
-#[cfg(not(target_arch = "wasm32"))]
 pub const HALO2_KZG_BN254_MAX_PROTOCOL_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROTOCOL_LEN;
-#[cfg(not(target_arch = "wasm32"))]
 pub const HALO2_KZG_BN254_MAX_PROOF_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROOF_LEN;

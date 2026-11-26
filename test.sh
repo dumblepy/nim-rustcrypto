@@ -11,12 +11,17 @@ test -s target/release/librust_crypto_ffi.a
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo "==> Skip wasm/wasi cross-build on macOS (use Linux CI for wasm targets; blst needs clang with wasm32 support)"
+  echo "==> Halo2 native fixture smoke"
+  cargo run --locked --release --example halo2_verify
 else
   rustup target add wasm32-unknown-unknown wasm32-wasip1
   cargo build --locked --release --lib --target wasm32-unknown-unknown
   cargo build --locked --release --lib --target wasm32-wasip1
   test -s target/wasm32-unknown-unknown/release/librust_crypto_ffi.a
   test -s target/wasm32-wasip1/release/librust_crypto_ffi.a
+
+  echo "==> Halo2 wasm build/link/smoke"
+  "$repo_root/ci/test_halo2_wasm.sh"
 fi
 
 echo "==> Sync Rust static library"

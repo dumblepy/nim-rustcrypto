@@ -23,6 +23,15 @@ requires "https://github.com/itsumura-h/nim-rustcrypto"
 
 On Linux x86_64, `nimble add` / `nimble install` automatically downloads and unpacks the Rust FFI static archive from GitHub Release, so normal consumers do not need Rust installed. Use `nimble fetchRustFfi` or `nimble buildRustFfiLocal` only when you need to refresh the archive during development.
 
+## Target support
+
+Linux x86_64, macOS arm64, `wasm32-unknown-unknown`, and `wasm32-wasip1` ship Rust FFI
+static archives. The Halo2 KZG/BN254 verifier is now available on both wasm targets:
+the committed v1 fixture is verified through the C ABI under Node `WebAssembly`
+(`wasm32-unknown-unknown`) and Node WASI (`wasm32-wasip1`), while native targets keep
+the parallel verification path. See [Halo2 docs](docs/halo2.md) for the exact tested
+runtimes, the vendored `halo2-axiom` feature patch, and security notes.
+
 公開鍵による非対話暗号化: [RFC 9180 HPKE Base mode](docs/hpke.md) (`Hpke.generateSecretKey/publicKey/seal/open`)。
 
 ## Documentation

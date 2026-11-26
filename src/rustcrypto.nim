@@ -14,8 +14,7 @@ when not defined(wasm32):
   import ./rustcrypto/algorithm/groth16_prover
 import ./rustcrypto/algorithm/plonk
 import ./rustcrypto/algorithm/plonky2
-when not defined(wasm32):
-  import ./rustcrypto/algorithm/halo2
+import ./rustcrypto/algorithm/halo2
 import ./rustcrypto/algorithm/ed25519
 import ./rustcrypto/algorithm/rsa
 import ./rustcrypto/algorithm/bcrypt
@@ -40,8 +39,7 @@ when not defined(wasm32):
   export groth16_prover
 export plonk
 export plonky2
-when not defined(wasm32):
-  export halo2
+export halo2
 export ed25519
 export rsa
 export bcrypt

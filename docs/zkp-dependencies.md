@@ -12,9 +12,9 @@ proof formats. The versions below are pinned in `rustcrypto-ffi/Cargo.lock`.
 | `genshi-core` / `genshi-math` | 0.3.0 | MIT OR Apache-2.0 | fixed PLONKish/KZG/BN254 verifier | all |
 | `qp-plonky2` (crate name `plonky2`) | 1.6.0 | MIT OR Apache-2.0 | Plonky2/Goldilocks verifier | all |
 | `qp-plonky2-verifier` | 1.6.0 | MIT OR Apache-2.0 | Plonky2 verifier-side types/serializer | all |
-| `snark-verifier` | 0.2.7 | MIT | Halo2/PSE-Axiom KZG verifier | native only |
-| `halo2-axiom` (via `halo2-base`) | 0.5.3 | MIT OR Apache-2.0 | Halo2 proof system types | native only |
-| `bincode` | 1.3.3 | MIT | Halo2 protocol encoding | native only |
+| `snark-verifier` | 0.2.7 | MIT | Halo2/PSE-Axiom KZG verifier | all |
+| `halo2-axiom` (via `halo2-base`) | 0.5.3 (vendored feature patch) | MIT OR Apache-2.0 | Halo2 proof system types | all |
+| `bincode` | 1.3.3 | MIT | Halo2 protocol encoding | all |
 
 Other transitive dependencies retain their own licenses. See the generated
 `Cargo.lock` and each crate's repository for the authoritative list.
@@ -42,10 +42,16 @@ your own threat model.
 | Groth16/BN254 | build + test | build + test | build | build |
 | PLONK/BN254 (genshi) | build + test | build + test | build | build |
 | Plonky2 | build + test | build + test | build | build |
-| Halo2 KZG/BN254 | build + test | build + test | **unsupported** | **unsupported** |
+| Halo2 KZG/BN254 | build + test | build + test | build + test (Node `WebAssembly`) | build + test (Node WASI) |
 
-"build" means the Rust staticlib compiles. wasm execution and performance were not
-measured in this environment; do not claim runtime support based on compilation alone.
+"build" means the Rust staticlib compiles. For Halo2, the committed v1 fixture is also
+verified through the C ABI on both wasm targets (`ci/test_halo2_wasm.sh`). Other wasm
+runtimes and wasm performance were not measured; do not extend the claim beyond the
+executed hosts listed in `docs/halo2.md`.
+
+`halo2-axiom` 0.5.3 is vendored with a one-line default-feature change (remove
+`multicore`) so wasm can build without atomics. See
+`rustcrypto-ffi/third_party/PATCH.md` for provenance, diff, and update steps.
 
 ## Native smoke benchmark (indicative only)
 
@@ -60,5 +66,8 @@ Nim `-d:release`), verifying the committed fixtures with a warm process. These a
 | Plonky2 | ~4.3 ms |
 | Halo2 KZG/BN254 | ~10.0 ms |
 
-Static archive sizes in this build: Linux x86_64 ~43 MiB, each wasm archive ~20 MiB.
-Memory usage, instruction counts, and wasm runtime timings were not measured.
+Static archive sizes in this build after enabling Halo2 on wasm: Linux x86_64
+49,514,810 bytes (~47.2 MiB), `wasm32-unknown-unknown` 33,112,418 bytes
+(~31.6 MiB), `wasm32-wasip1` 32,204,876 bytes (~30.7 MiB). These are raw `.a`
+sizes, not compressed release assets. Memory usage, instruction counts, and wasm
+runtime timings were not measured.
