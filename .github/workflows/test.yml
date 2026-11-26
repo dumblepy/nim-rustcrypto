@@ -8,9 +8,9 @@ permissions:
 
 jobs:
   zkp-integration:
-    name: ZKP integration (Groth16 and Bulletproofs R1CS)
+    name: ZKP integration
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       ZKP_RUST_WASM_TARGETS_INSTALLED: "1"
       CC_wasm32_unknown_unknown: clang
@@ -23,6 +23,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
+
+      - name: Install LLVM tools for archive symbol checks
+        run: rustup component add llvm-tools-preview
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -69,6 +72,20 @@ jobs:
             ${{ runner.temp }}/bulletproofs-r1cs/native-measurements.csv
             ${{ runner.temp }}/bulletproofs-r1cs/native-rss.txt
             ${{ runner.temp }}/bulletproofs-r1cs/wasm-measurements.json
+
+      - name: Test Halo2 KZG/BN254 native and WASM fixture smoke
+        id: halo2
+        if: ${{ !cancelled() }}
+        run: ./ci/test_halo2_wasm.sh "$RUNNER_TEMP/halo2-kzg-bn254"
+
+      - name: Upload Halo2 KZG/BN254 smoke report
+        if: ${{ !cancelled() && steps.halo2.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: halo2-kzg-bn254-smoke
+          path: |
+            ${{ runner.temp }}/halo2-kzg-bn254/environment.txt
+            ${{ runner.temp }}/halo2-kzg-bn254/symbols.txt
 
   # Linux x86_64 上の開発用 Docker イメージで、既存の test.sh（Rust + wasm/wasi クロスビルド + Nim）を実行する。
   linux-x86_64-docker-compose:

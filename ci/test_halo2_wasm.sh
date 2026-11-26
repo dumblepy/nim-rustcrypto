@@ -54,6 +54,8 @@ archives=(
 )
 
 echo "==> Check Halo2 C ABI symbols"
+symbol_report="$artifacts/symbols.txt"
+"$llvm_nm" --version | head -n 1 > "$symbol_report"
 for archive in "${archives[@]}"; do
   [[ -s "$archive" ]] || { echo "missing archive: $archive" >&2; exit 1; }
   defined="$("$llvm_nm" --defined-only -g "$archive" | awk '{print $NF}')"
@@ -62,6 +64,7 @@ for archive in "${archives[@]}"; do
       echo "missing $symbol in $archive" >&2
       exit 1
     fi
+    printf '%s %s\n' "$archive" "$symbol" >> "$symbol_report"
   done
   echo "$(basename "$archive"): all Halo2 symbols present"
 done
@@ -85,7 +88,7 @@ node "$repo_root/ci/halo2_wasm_smoke.mjs" \
   node --version
   "$llvm_nm" --version | head -n 1
   for archive in "${archives[@]}"; do
-    printf '%s %s bytes\n' "$(basename "$archive")" "$(stat -c%s "$archive")"
+    printf '%s %s bytes\n' "$archive" "$(stat -c%s "$archive")"
   done
   for wasm in \
     "$CARGO_TARGET_DIR/wasm32-wasip1/release/examples/halo2_verify.wasm" \

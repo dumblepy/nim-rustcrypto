@@ -138,6 +138,11 @@ The same fixture is exercised through the C ABI by
 `ci/test_halo2_wasm.sh` builds both archives, checks the four Halo2 symbols with
 `llvm-nm`, and runs the native and both wasm smoke tests. The wasm runtimes above are
 the environments this repository actually executes; other wasm hosts are not claimed.
+GitHub Actions runs this script in the `ZKP integration` job (with
+`environment.txt` / `symbols.txt` artifacts). `test.sh`, used by the Linux Docker and
+macOS jobs, runs the generic Rust/Nim suites (which include native Halo2 unit and
+integration tests) and builds both wasm archives, but does not repeat this dedicated
+C ABI example smoke.
 
 Measured raw archive sizes in this build: Linux x86_64 49,496,168 bytes,
 `wasm32-unknown-unknown` 33,142,524 bytes, `wasm32-wasip1` 32,237,204 bytes. wasm

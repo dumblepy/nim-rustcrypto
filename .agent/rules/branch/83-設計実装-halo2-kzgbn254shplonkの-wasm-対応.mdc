@@ -290,6 +290,14 @@ wasm の `panic=abort` では致命的なため、`parse_protocol` に
 最終統合: `./test.sh`（Rust 全 tests + 両 wasm build + Halo2 native/WASI/unknown-unknown
 smoke + Nim 全 tests）が pass。
 
+CI 追補: Groth16 / Bulletproofs R1CS と同じ役割分担に揃えた。
+`.github/workflows/test.yml` の `ZKP integration` ジョブだけが
+`ci/test_halo2_wasm.sh`（native/WASI/unknown-unknown smoke、symbol 検査、
+`environment.txt` / `symbols.txt` artifact）を実行する。`test.sh` は汎用の
+`cargo test` / `nimble test` と両 wasm archive build のみを行い、Halo2 専用の
+example smoke は重複実行しない。native Halo2 の Rust/Nim テストは `test.sh`
+（Linux Docker / macOS ジョブ）側で引き続き実行される。
+
 ### 11.6 Nim wasm link の扱い
 
 このリポジトリの既存 CI には Nim の wasm 実行ターゲットがない（Nim 2.2 の OS 一覧に
