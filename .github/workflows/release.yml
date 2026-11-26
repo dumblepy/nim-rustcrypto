@@ -151,8 +151,13 @@ jobs:
           EOF
           cat > main.nim <<EOF
           import rustcrypto/algorithm/sha256
+          import rustcrypto/algorithm/halo2
+          import rustcrypto/algorithm/ffi
 
           doAssert sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+          var emptyHalo2Params: array[Halo2KzgBn254ParamsV1Len, byte]
+          doAssert not Halo2KzgBn254.validateParams(emptyHalo2Params)
           EOF
           (cd "$package_dir" && nimble install -y)
           printf '%s\n' 'requires "rustcrypto >= 0.1.0"' >> consumer.nimble
@@ -285,8 +290,13 @@ jobs:
           EOF
           cat > main.nim <<EOF
           import rustcrypto/algorithm/sha256
+          import rustcrypto/algorithm/halo2
+          import rustcrypto/algorithm/ffi
 
           doAssert sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+          var emptyHalo2Params: array[Halo2KzgBn254ParamsV1Len, byte]
+          doAssert not Halo2KzgBn254.validateParams(emptyHalo2Params)
           EOF
           (cd "$package_dir" && nimble install -y)
           printf '%s\n' 'requires "rustcrypto >= 0.1.0"' >> consumer.nimble

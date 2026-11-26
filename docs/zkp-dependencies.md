@@ -66,8 +66,8 @@ Nim `-d:release`), verifying the committed fixtures with a warm process. These a
 | Plonky2 | ~4.3 ms |
 | Halo2 KZG/BN254 | ~10.0 ms |
 
-Static archive sizes in this build after enabling Halo2 on wasm: Linux x86_64
-49,514,810 bytes (~47.2 MiB), `wasm32-unknown-unknown` 33,112,418 bytes
-(~31.6 MiB), `wasm32-wasip1` 32,204,876 bytes (~30.7 MiB). These are raw `.a`
-sizes, not compressed release assets. Memory usage, instruction counts, and wasm
-runtime timings were not measured.
+Static archive sizes in this build after enabling Halo2 on wasm and protocol-shape
+validation: Linux x86_64 49,496,168 bytes (~47.2 MiB), `wasm32-unknown-unknown`
+33,142,524 bytes (~31.6 MiB), `wasm32-wasip1` 32,237,204 bytes (~30.7 MiB). These
+are raw `.a` sizes, not compressed release assets. Memory usage, instruction counts,
+and wasm runtime timings were not measured.

@@ -259,7 +259,38 @@ error: The multicore feature flag is not supported on wasm32 architectures witho
   `wasm32-unknown-unknown` 実行では未使用の getrandom/wasm-bindgen imports を
   「呼ばれたら失敗する」stub にして、実行経路が entropy を要求しないことも確認。
 
-### 11.5 Nim wasm link の扱い
+### 11.5 追加実装（並列タスク）
+
+初回実装後の残タスクを独立 4 タスクに分割し、並列で実装した。
+
+| タスク | 担当ファイル | 内容 | 結果 |
+|---|---|---|---|
+| A | `examples/halo2_fixture_multi.rs`, `tests/fixtures/halo2_kzg_bn254_multi_v1.hex`, `tests/halo2_multi_fixture.rs`, `tests/algorithm/test_halo2_multi.nim`, `tests/test_algorithm.nim` | K=10、2 advice / 2 instance 列、各 2 public value の fixture。生成時に halo2-axiom native `verify_proof` で differential 確認 | pass |
+| B | `tests/halo2_robustness.rs` | NULL/zero/oversized/truncated/trailing/header/bincode length/instance overflow/noncanonical と 2000 回の bounded mutation fuzz | pass（初回 fuzz が panic を検出、下記修正） |
+| C | `tests/algorithm/test_halo2.nim` | wrong VK/SRS、raw FFI NULL/zero-length、50 回繰り返し、validate 境界 | 17 tests pass |
+| D | `.github/workflows/release.yml` | Linux/macOS consumer install で Halo2 import + 328-byte params validate を実行し symbol link を強制 | YAML/local link pass |
+
+B の fuzz は VK の 1 byte 改変（VK offset 444, xor 0x39）で
+`snark-verifier` の `evaluations.remove(query).unwrap()` panic を検出した。
+wasm の `panic=abort` では致命的なため、`parse_protocol` に
+`validate_protocol_shape` を追加し、verifier 呼び出し前に以下を拒否するようにした:
+
+- duplicate / missing evaluation・query keys
+- query polynomial index の範囲（quotient slot を含む）
+- rotation の範囲（i32::MIN を含む）
+- instance query と evaluation map の整合性
+- accumulator index の instance 列・行範囲
+- chunk degree 0 / 過大、witness/challenge/query 総数の上限
+- `domain_as_witness` と非 v1 linearization slot
+
+修正後、B の fuzz 11 tests（回帰テスト追加で 12）と valid fixture 2 種がすべて pass。
+深い bincode 再帰は 2 MiB 上限の範囲で追加の深さ制限を持たず、信頼済み VK 前提の
+残余リスクとして docs に明記した。
+
+最終統合: `./test.sh`（Rust 全 tests + 両 wasm build + Halo2 native/WASI/unknown-unknown
+smoke + Nim 全 tests）が pass。
+
+### 11.6 Nim wasm link の扱い
 
 このリポジトリの既存 CI には Nim の wasm 実行ターゲットがない（Nim 2.2 の OS 一覧に
 `wasip1` がなく、`--os:standalone` は std/strutils 等を満たさない）。そのため
