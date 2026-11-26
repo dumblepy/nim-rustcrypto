@@ -1,9 +1,6 @@
 import ./ffi
 import ./common
 
-when defined(wasm32):
-  {.error: "Halo2 KZG/BN254 verification (snark-verifier/halo2-axiom) is not supported on wasm32 targets. Use the native (Linux x86_64 / macOS arm64) archive.".}
-
 type
   Halo2KzgBn254* = object
 

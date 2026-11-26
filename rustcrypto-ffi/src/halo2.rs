@@ -86,6 +86,15 @@ pub const HALO2_KZG_BN254_MAX_PROOF_LEN: usize = 16 * 1024 * 1024;
 pub const HALO2_KZG_BN254_MAX_INSTANCE_COLUMNS: usize = 64;
 pub const HALO2_KZG_BN254_MAX_INSTANCE_VALUES: usize = 1 << 20;
 
+// Defensive protocol-shape limits. These are far above what the fixed v1
+// profile needs and keep verifier internals from panicking or allocating
+// unbounded tables on hostile (but bincode-valid) protocol data.
+const HALO2_KZG_BN254_MAX_ROTATION: i32 = 1 << 12;
+const HALO2_KZG_BN254_MAX_WITNESS_TOTAL: usize = 1 << 20;
+const HALO2_KZG_BN254_MAX_CHALLENGE_TOTAL: usize = 1 << 20;
+const HALO2_KZG_BN254_MAX_QUERY_COUNT: usize = 1 << 20;
+const HALO2_KZG_BN254_MAX_CHUNK_DEGREE: usize = 1 << 20;
+
 fn halo_fq_from_be(bytes: &[u8]) -> Result<Fq, c_int> {
     if bytes.len() != 32 {
         return Err(RUSTCRYPTO_ERR_INVALID_LENGTH);
@@ -158,6 +167,135 @@ fn parse_params(bytes: &[u8]) -> Result<KzgDecidingKey<Bn256>, c_int> {
     Ok(KzgDecidingKey::<Bn256>::new(g1, g2, s_g2))
 }
 
+fn valid_rotation(rotation: i32) -> bool {
+    rotation
+        .checked_abs()
+        .is_some_and(|value| value <= HALO2_KZG_BN254_MAX_ROTATION)
+}
+
+/// Rejects protocol shapes that would make `snark-verifier` panic (duplicate
+/// or missing evaluation keys, out-of-range accumulator indices, zero chunk
+/// degree) or allocate unbounded tables. The v1 profile is unchanged: valid
+/// native fixtures pass these checks.
+fn validate_protocol_shape(protocol: &PlonkProtocol<G1Affine>) -> Result<(), c_int> {
+    if protocol.domain_as_witness.is_some()
+        || protocol.quotient.chunk_degree == 0
+        || protocol.quotient.chunk_degree > HALO2_KZG_BN254_MAX_CHUNK_DEGREE
+        || protocol.evaluations.len() > HALO2_KZG_BN254_MAX_QUERY_COUNT
+        || protocol.queries.len() > HALO2_KZG_BN254_MAX_QUERY_COUNT
+    {
+        return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+    }
+
+    let witness_total = protocol
+        .num_witness
+        .iter()
+        .try_fold(0usize, |total, &count| total.checked_add(count));
+    let challenge_total = protocol
+        .num_challenge
+        .iter()
+        .try_fold(0usize, |total, &count| total.checked_add(count));
+    let (Some(witness_total), Some(challenge_total)) = (witness_total, challenge_total) else {
+        return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+    };
+    if witness_total > HALO2_KZG_BN254_MAX_WITNESS_TOTAL
+        || challenge_total > HALO2_KZG_BN254_MAX_CHALLENGE_TOTAL
+    {
+        return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+    }
+
+    let total_polynomials = protocol
+        .preprocessed
+        .len()
+        .checked_add(protocol.num_instance.len())
+        .and_then(|total| total.checked_add(witness_total));
+    let Some(total_polynomials) = total_polynomials else {
+        return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+    };
+
+    let mut evaluation_keys: Vec<(usize, i32)> = protocol
+        .evaluations
+        .iter()
+        .map(|query| (query.poly, query.rotation.0))
+        .collect();
+    evaluation_keys.sort_unstable();
+    if evaluation_keys.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+    }
+
+    let mut query_keys: Vec<(usize, i32)> = protocol
+        .queries
+        .iter()
+        .map(|query| (query.poly, query.rotation.0))
+        .collect();
+    query_keys.sort_unstable();
+    if query_keys.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+    }
+
+    let numerator_queries: Vec<(usize, i32)> = protocol
+        .quotient
+        .numerator
+        .used_query()
+        .into_iter()
+        .map(|query| (query.poly, query.rotation.0))
+        .collect();
+
+    // `commitments` appends the quotient polynomial at index
+    // `total_polynomials` and inserts it into the evaluation map. The fixed v1
+    // compile path (`snark-verifier` `system::halo2::compile`) sets
+    // `linearization: None`, so no `total_polynomials + 1` slot is expected.
+    for &(poly, rotation) in evaluation_keys.iter().chain(query_keys.iter()) {
+        if poly > total_polynomials || !valid_rotation(rotation) {
+            return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+        }
+    }
+    for &(poly, rotation) in &numerator_queries {
+        if poly >= total_polynomials || !valid_rotation(rotation) {
+            return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+        }
+    }
+
+    // `PlonkProof::evaluations` builds the evaluation map from the instance
+    // queries plus `protocol.evaluations`; every `protocol.queries` entry must
+    // be one of those keys or `evaluations.remove(query).unwrap()` panics.
+    let mut expected = evaluation_keys;
+    if protocol.instance_committing_key.is_none() {
+        let offset = protocol.preprocessed.len();
+        let end = offset
+            .checked_add(protocol.num_instance.len())
+            .ok_or(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY)?;
+        for &(poly, rotation) in &numerator_queries {
+            if poly >= offset && poly < end {
+                expected.push((poly, rotation));
+            }
+        }
+    }
+    expected.push((total_polynomials, 0));
+    expected.sort_unstable();
+    expected.dedup();
+    for key in &query_keys {
+        if expected.binary_search(key).is_err() {
+            return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+        }
+    }
+
+    // `PlonkProof::read` indexes instances[i][j] for every accumulator index.
+    for indices in &protocol.accumulator_indices {
+        for &(poly, row) in indices {
+            let count = protocol
+                .num_instance
+                .get(poly)
+                .ok_or(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY)?;
+            if row >= *count {
+                return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_protocol(bytes: &[u8]) -> Result<PlonkProtocol<G1Affine>, c_int> {
     if bytes.len() < HALO2_KZG_BN254_VK_V1_HEADER_LEN {
         return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
@@ -183,8 +321,13 @@ fn parse_protocol(bytes: &[u8]) -> Result<PlonkProtocol<G1Affine>, c_int> {
         .deserialize(&bytes[HALO2_KZG_BN254_VK_V1_HEADER_LEN..])
         .map_err(|_| RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY)?;
 
+    // Use u64 for the sum so a hostile 32-bit `usize` count cannot overflow
+    // (and panic under debug builds) on wasm32.
+    let total_instance_values = protocol.num_instance.iter().try_fold(0u64, |total, &count| {
+        total.checked_add(count as u64)
+    });
     if protocol.num_instance.len() > HALO2_KZG_BN254_MAX_INSTANCE_COLUMNS
-        || protocol.num_instance.iter().sum::<usize>() > HALO2_KZG_BN254_MAX_INSTANCE_VALUES
+        || total_instance_values.is_none_or(|total| total > HALO2_KZG_BN254_MAX_INSTANCE_VALUES as u64)
         || protocol.num_witness.len() > HALO2_KZG_BN254_MAX_INSTANCE_COLUMNS
         || protocol.preprocessed.len() > 4096
     {
@@ -213,6 +356,7 @@ fn parse_protocol(bytes: &[u8]) -> Result<PlonkProtocol<G1Affine>, c_int> {
             }
         }
     }
+    validate_protocol_shape(&protocol)?;
     Ok(protocol)
 }
 

@@ -33,8 +33,8 @@ Prefer the high-level `rustcrypto/algorithm/bls` module when possible.
   `rustcrypto_plonky2_common_validate`.
 - **Halo2 (PSE/Axiom KZG/BN254, SHPLONK, Blake2b):**
   `rustcrypto_halo2_kzg_bn254_verify`, `_params_validate`, `_vk_validate`, and
-  `_instances_validate`. Native targets only; the wasm archives do not contain these
-  symbols.
+  `_instances_validate`. Present in the native and both wasm archives; the wasm
+  verifier runs sequentially. See [halo2.md](halo2.md) for the executed wasm hosts.
 
 All verifier entry points return `RustCryptoOk` on success,
 `RustCryptoErrVerificationFailed` for a well-formed but invalid proof, and a distinct

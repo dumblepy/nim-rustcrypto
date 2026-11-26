@@ -1,0 +1,349 @@
+---
+description: 83-設計実装-halo2-kzgbn254shplonkの-wasm-対応 ブランチでの開発時に読み込む
+alwaysApply: false
+---
+## 目的
+
+既存の Halo2 KZG / BN254 Verifier（#69）を Native 専用から WebAssembly 対応へ拡張する。Groth16・PLONK・Plonky2 等と同じライブラリの WASM 対応方針を採用し、現在の Axiom Halo2 / snark-verifier を最大限再利用する。Nim API、C ABI、v1 wire format を維持し、特定アプリケーションの回路に依存しない汎用検証ライブラリとする。
+
+**対応範囲は既存の標準配布ターゲット（Native Linux/macOS、wasm32-unknown-unknown、wasm32-wasip1）に揃える。** WASI や ICP Canister を個別の正式対応環境として追加することは本 Issue の目的ではない。特定ランタイムの統合、Canister example、汎用 Prover/KeyGen API、Browser Prover の新規実装、s-token 回路移植、別 profile、trusted setup ceremony はスコープ外。既存の実行基盤を用いた追加 smoke test は任意とし、別環境の正式サポートを約束しない。
+
+## 1. 現状調査
+
+基準: main tree `ea84b3176b2dd73af807a2623654759c2c49764b`（実装着手時に最新 main と照合）。
+
+| ファイル | 現状 / 課題 |
+|---|---|
+| `rustcrypto-ffi/Cargo.toml` | `snark-verifier = 0.2.7` (default-features=false) と `bincode = 1.3.3` が non-wasm target dependencies のみ |
+| `rustcrypto-ffi/src/lib.rs` | `mod halo2` および関連定数が `cfg(not(target_arch="wasm32"))` |
+| `rustcrypto-ffi/src/halo2.rs` | `PlonkVerifier<KzgAs<Bn256, Bdfg21>>` による汎用 verify、Blake2b transcript、境界検証、C ABI を実装済み |
+| `src/rustcrypto/algorithm/ffi.nim` | 4つの Halo2 importc 宣言が `when not defined(wasm32)` |
+| `src/rustcrypto/algorithm/halo2.nim` | wasm32 で明示的な compile error |
+| `src/rustcrypto.nim` | wasm32 では Halo2 import/export を除外 |
+| `docs/halo2.md` | Native 対応、unknown-unknown / wasip1 非対応。理由は halo2-axiom の Rayon parallel iterator |
+| `rustcrypto-ffi/examples/halo2_fixture.rs` | Axiom Halo2 の小規模回路、SHPLONK / Blake2b proof、テスト専用 seeded SRS、protocol serialization を生成 |
+| `tests/fixtures/halo2_kzg_bn254_v1.hex` | Native と WASM の互換性検証に使える既存 fixture |
+| `tests/algorithm/test_halo2.nim` | Native の正・負テストあり |
+| `ci/test_groth16_web.sh` / `ci/test_bulletproofs_r1cs.sh` | Browser/Node/WASI/ICP 等の既存検証基盤として参照 |
+| `test.sh`, `rustcrypto.nimble`, `.github/workflows/{test,release}.yml` | 既に2種の wasm static archive の build / sync / release 経路あり。既存の配布経路に Halo2 symbols と同等のテストを追加する |
+
+重要: Rayon が障壁であることは現行ドキュメントに基づく。実際のコンパイルエラー、feature unification、実行時の依存は未計測。単に cfg を削除したり multicore を off にするだけで対応できると仮定しない。
+
+## 2. 対応範囲
+
+| Target | Verifier |
+|---|---|
+| Linux x86_64 | 既存対応・回帰テスト |
+| macOS arm64 | 既存対応・回帰テスト |
+| wasm32-unknown-unknown | 既存方式と同じ staticlib / Nim FFI 対応を追加 |
+| wasm32-wasip1 | 既存方式と同じ staticlib / Nim FFI 対応を追加 |
+
+既存の [Groth16](https://github.com/dumblepy/nim-rustcrypto/blob/main/docs/groth16-bn254.md) / [Plonky2](https://github.com/dumblepy/nim-rustcrypto/blob/main/docs/plonky2.md) と同じ target triple 単位で扱う。wasm32-wasip1 は既存配布対象であり、削除しない。ただし、この target のビルド対応と特定 WASI ランタイムの正式サポートは区別する。
+
+既存 fixture を利用した WASM 実行 smoke test は既存テスト基盤で可能な範囲で行う。各ランタイムへの対応を個別に必須化しない。実行を確認していない target/runtime はビルド確認のみと明記する。
+
+## 3. 固定プロファイルと互換性契約
+
+現行 `docs/halo2.md` を規範とする。
+
+| 項目 | v1（維持） |
+|---|---|
+| Proof system | PSE/Axiom Halo2, KZG / BN254 Fr |
+| Multi-opening | SHPLONK（Bdfg21） |
+| Transcript | Blake2bRead / Blake2bWrite、Halo2-Transcript、64-byte challenges |
+| Verifier | snark-verifier 0.2.7 / halo2-axiom 0.5.3（現行 lockfile を基準） |
+| Params | RCH2P1、328 bytes、[1]₁ / [1]₂ / [tau]₂ の canonical BE 座標 |
+| VK | RCH2V1、u32 BE 長 + bincode 1.3.3 fixed-int PlonkProtocol<G1Affine> |
+| Public instances | RCH2I1、列数/各値数 u32 BE、各 Fr 32-byte canonical BE |
+| Proof | raw Axiom Halo2 Blake2b SHPLONK transcript bytes |
+
+- 既存 fixture を一切変換せず Native で検証でき、既存 WASM テスト基盤で実行可能な場合も同じ結果になること。
+- プラットフォーム固有の usize、endianness、serde、curve serialization、challenge reduction による差異を確認する。VK の bincode 固定形式・列順・transcript 読み取り量を維持する。
+- IPA/Pasta、GWC、Poseidon/Keccak transcript、gnark PLONK 等は非互換として扱う。
+- ライブラリ更新で v1 互換性が崩れる場合は黙って形式を変更しない。v1 を維持する修正を優先し、不可避なら別 profile/version を明示して設計レビューを行う。
+- Verifier はフル SRS、proving key、witness、回路実装を必要としない。現行 328-byte deciding key subset と data-only protocol を利用する。
+
+## 4. アーキテクチャ / 実装方針
+
+```mermaid
+flowchart TD
+  N[Nim API: Halo2KzgBn254] --> F[共通 C ABI / Rust halo2.rs]
+  F --> V[snark-verifier / KZG SHPLONK / BN254]
+  V --> A[Native staticlib]
+  V --> B[wasm32-unknown-unknown staticlib]
+  V --> C[wasm32-wasip1 staticlib]
+  P[既存 Native fixture generator] --> T[共通 fixture / regression tests]
+  T --> F
+```
+
+共通 parsing / validation / transcript / verification を維持し、ターゲット差分は依存関係と並列処理等に閉じ込める。特定ランタイム用アダプターや Prover を標準ライブラリに追加しない。
+
+### Phase 0: 依存関係・実現性調査
+
+1. Ubuntu 開発コンテナで現行 native build / test と既存 fixture を再現し、Rust toolchain、Cargo.lock、WASM toolchain を記録。
+2. `cargo tree --locked -e features --target <target>` と inverse tree を用い、snark-verifier → halo2-base → halo2-axiom → halo2curves / maybe-rayon / rayon の全 feature 経路を native / unknown-unknown / wasip1 で比較する。default-features=false が transitive dependency の default features まで無効化するとは仮定しない。
+3. 最小検証 crate で両 wasm target の build を試し、コンパイルエラーの crate / file / feature、必要な修正を一覧化。最小の修正で build を成立させ、既存 WASM テスト基盤で実行可能なら fixture verify を行う。
+4. スレッド、atomics、getrandom、OS I/O、filesystem、clock、WASI syscalls、wasm-bindgen imports、panic/unwind、allocator の要件を調査。Verifier の実行経路は外部乱数不要とする。
+5. 以下の採用優先順を評価し、結果と理由を branch rule / ADR に記録する。
+
+| 案 | 方針 | 採用条件 |
+|---|---|---|
+| A（第一候補） | 現行 crate と feature 選択で WASM build | 既存 v1 fixture 互換、native 性能維持、既存2種 WASM target の build/link 成功 |
+| B | Axiom/snark-verifier の最小パッチ（WASM の並列 iterator を逐次化、依存の feature 分離） | crypto 数式・transcript・serialization を変更せず、native の並列最適化を維持 |
+| C | verifier-only crate / feature に分離し、不要な prover 依存を取り除く | A/B が不成立または依存負荷過大の場合。既存 v1 の differential tests と独立レビューを必須とする |
+
+B の場合は git rev / vendored patch の由来、差分、ライセンス、更新手順、上流への還元可否を記録。Cargo の patch と lockfile で再現性を確保する。任意の最新版への更新や暗号アルゴリズムの独自再実装を初手としない。選定結果が出るまでは具体的な fork や修正箇所を確定しない。
+
+### Phase 1: Rust Verifier と C ABI
+
+対象: `rustcrypto-ffi/{Cargo.toml,Cargo.lock}`、`src/{lib,halo2}.rs`、既存共通 error/buffer modules。
+
+- native 専用依存のうち Halo2 に必要な依存のみ wasm 対応化。bcrypt など無関係な target 設定を破壊しない。
+- wasm 用 staticlib に以下の4 C symbols を含める。現行 signature / status code / buffer ownership を保持する。
+  - `rustcrypto_halo2_kzg_bn254_verify`
+  - `rustcrypto_halo2_kzg_bn254_params_validate`
+  - `rustcrypto_halo2_kzg_bn254_vk_validate`
+  - `rustcrypto_halo2_kzg_bn254_instances_validate`
+- `HALO2_KZG_BN254_*_LEN` 定数を両 target で利用可能にする。
+- feature 分離が必要な場合も、既存標準配布 archive から Halo2 verifier を利用できることを目標とする。Prover の新規追加は行わない。
+- verifier-only の経路では rayon worker の初期化、OS/JS entropy、WASI I/O を要求しない。既存ライブラリの他機能の必要な imports と区別し、既存 WASM ビルド・リンク経路で確認する。
+
+### Phase 2: Nim API / FFI
+
+対象: `src/rustcrypto/algorithm/{ffi,halo2}.nim`、`src/rustcrypto.nim`。
+
+現行の marker type + type-first API をそのまま利用する。
+
+```nim
+import rustcrypto/algorithm/halo2
+
+let valid = Halo2KzgBn254.verify(params, vk, proof, publicInstances)
+```
+
+- FFI 宣言の `when not defined(wasm32)`、halo2.nim の compile error、umbrella module の import/export gate を実装成立後に解除する。
+- `validateParams` / `validateVerifyingKey` / `validatePublicInstances` を維持。
+- 形式不正は既存 status → ValueError、構造的に有効だが検証不成立なら false、成功なら true の規約を維持する。テストで既存 Native と一致させる。
+- アプリ側に `--passL` / archive path を直接書かせない。既存 FFI module / fetch / sync tooling を活用。
+- Rust の ownership / Vec / Result / reference を C ABI に公開しない。
+
+### Phase 3: WASM ビルド・リンク・既存テスト統合
+
+- 既存 `test.sh`、`rustcrypto.nimble`、FFI fetch/sync tooling で両 WASM static archive を生成・同期する。
+- `llvm-nm` 等で両 archive に既存 Halo2 4 C ABI symbols が含まれることを検査する。
+- 既存 Nim WASM ビルド方法で `import rustcrypto/algorithm/halo2` と `Halo2KzgBn254.verify` のリンクを確認する。umbrella module からの利用も確認する。
+- 既存 Native fixture をそのまま使用する。既存 Groth16/Bulletproofs の WASM テスト基盤を流用可能な場合は、正例・負例の実行 smoke test を追加する。新規 Browser Prover や ICP Canister example の実装は要求しない。
+- WASM のコンパイル、リンク、実行の確認結果を区別して記録する。既存の対象ターゲットを増減しない。
+
+## 5. セキュリティ・リソース境界
+
+- 既存 params 328 bytes、protocol max 2 MiB、proof max 16 MiB、instance columns max 64 / values max 2^20 といった v1 の上限・canonical encoding を維持する。利用環境の ingress/message/instruction/memory limit は別途適用し、上限いっぱいの input を許容可能とは主張しない。
+- FFI 入力ポインタ、NULL + nonzero length、長さ加算/乗算 overflow、truncated/trailing data、noncanonical Fr/Fq、off-curve/wrong subgroup/infinity（仕様に従う）を拒否する。
+- bincode deserialize の byte limit だけで allocation 上限が保証されるとは仮定しない。悪意ある collection length / expression graph / protocol shape の検証、checked arithmetic、bounded allocation をレビュー。信頼済み VK の利用を前提としつつ、validation API も異常入力で panic しないようにする。
+- wasm の panic=abort 環境では catch_unwind が trap 回避を保証しない。外部入力を処理する経路の unwrap/assert/indexing/overflow と依存ライブラリ内部の panic を調査し、事前検証またはエラー伝播で解消する。
+- proof verification の結果は fail-closed。WASM 都合で pairing / transcript / subgroup check / public input binding を省略しない。
+- KZG は trusted setup が必要。現行 fixture の seeded SRS はテスト専用。SRS と VK の承認・配布・pinning は利用側の責務。
+- 依存 crate はこのプロジェクトによる監査済みとはみなさない。暗号上の差分がある場合は独立レビューを行う。
+
+## 6. テスト設計
+
+### Positive / interoperability
+
+- 既存 `tests/fixtures/halo2_kzg_bn254_v1.hex` をそのまま使用し Native で検証。WASM は既存テスト基盤で実行可能な範囲を確認。
+- native Rust / native Nim の結果一致。既存 WASM 実行基盤で確認できる場合は同一 fixture の結果も一致させる。
+- 複数 instance columns、複数 public input、小規模だけでなく中規模回路の fixture を追加（既存 profile と互換）。
+- Axiom native verifier と snark-verifier path の differential test。任意の proof が valid と誤判定されないこと。
+
+### Negative / robustness
+
+- 改変 proof、wrong VK、wrong SRS、wrong public instances、列順/列数違い、proof/VK/params/instances の truncated/trailing/oversized bytes、invalid field / curve point。
+- 別 transcript / PCS / profile、malformed bincode length、instance count overflow、NULL pointer、zero length。
+- FFI status / Nim exception の契約維持、繰返し呼出時の memory leak、oversized input の早期拒否。WASM 実行テストが可能な環境では同じ負例を検証。
+- bounded fuzz / property tests を Rust parser に追加し、得られた regression vectors を 既存テストへ投入。
+- Groth16 / Bulletproofs / PLONK / Plonky2 および既存暗号 API の全回帰。
+
+## 7. 性能・サイズ確認
+
+既存ライブラリと同等の品質確認を行う。特定アプリケーションや Canister の性能測定は別 Issue とする。
+
+- Native verifier の回帰確認、両 WASM static archive のサイズと追加前との差分を記録。
+- 既存実行基盤で WASM verify を確認できる場合は、実行時間と取得可能なメモリ指標を記録（任意）。
+- 特定環境の cycles、ICP instruction 数、Browser proof generation の計測は必須としない。
+- 計測していない値や未実行環境は明示する。
+
+## 8. CI / Release / Docs
+
+- 既存 CI のテスト入口を拡張し、必要に応じて Halo2 の build/link/smoke 用スクリプトを追加する。
+- `test.sh` / `.github/workflows/test.yml` の既存 Linux WASM matrix と macOS native matrix を拡張。Groth16/BP の既存テストを削除しない。Cargo --locked、既存 wasm-bindgen-cli の pin、toolchain/cache を活用する。
+- `.github/workflows/release.yml` の既存 wasm32-unknown-unknown / wasm32-wasip1 archive に Halo2 4 symbols があることを `llvm-nm` 等で検査。生成 archive とパッケージインストール経路を既存方式と同等に確認する。
+- fetch/sync tools、nimble version、checksum、archive naming の既存規約を維持。新しい artifact が配布済みと仮定せず、release 後の利用手順を記載する。
+- `docs/halo2.md` の Target support、README の対応表、WASM build、使用例、対応 profile、SRS 注意事項、確認結果、既知制約を実際のテスト結果に合わせて更新する。
+- ビルド対応と実行確認を区別して記載する。CI artifact に必要に応じて環境情報、dependency feature tree、symbol report を保存する。
+
+## 9. 進捗（実装順）
+
+- [x] 最新 main から対応 branch を作成し `.agent/rules/branch/<branch-name>.mdc` に本設計・参考資料・進捗を記録
+- [x] Native baseline / 既存 fixture / dependency features / WASM error 調査、A/B/C 方針決定
+- [x] Rust Verifier の unknown-unknown / wasip1 build 対応
+- [x] 既存 halo2.rs / C ABI の両 WASM archive 対応
+- [x] Nim FFI / marker API / umbrella exports の WASM 対応
+- [x] 既存 fixture の Native 正負テスト、WASM build/link、既存基盤で可能な実行 smoke
+- [x] CI / release archive / install / 全既存テスト
+  - ローカルで `test.sh`（Rust + 両 wasm build + Halo2 smoke + Nim 全テスト）通過。
+    `test.sh` と `.github/workflows/release.yml` を更新。GitHub 上の実 workflow run は未実施。
+- [x] docs / README / usage / limitations 更新、依存パッチのレビュー
+
+## 10. 完了条件
+
+- [x] 既存 Native v1 fixture と正負テストが通過し、API・C ABI・wire format の後方互換性を維持する。
+- [x] 既存 Groth16 等と同様に両 WASM static archive を生成でき、Halo2 4 FFI symbols が含まれる。
+- [x] Nim の `Halo2KzgBn254.verify` を両 WASM target 向けにコンパイル・リンクできる。
+  - Rust archive は両 target でビルド・symbol 確認済み。Nim ソースは `--cpu:wasm32` で型チェック済み。Nim 2.2 は `--os:wasip1` を持たないため、Nim コンパイラ自身による wasm 実行ファイル link は既存基盤に存在せず未実施（下記参照）。
+- [x] 既存 WASM テスト基盤で可能な実行テストを行い、build/link/実行の確認範囲を記録する。特定 WASI runtime / ICP / Browser Prover の対応は完了条件に含めない。
+- [x] 不正 proof / malformed input の拒否規約を維持する。
+- [x] Native および既存暗号アルゴリズムの回帰なし、CI / release / install の確認を完了。
+  - ローカルの `test.sh` 全通過と release workflow の symbol 検査追加まで。GitHub Actions の実 run と
+    実 Release asset の生成は未実施。
+- [x] docs/halo2.md の Target support を既存 Groth16 等と同じ target triple 単位の表記に更新し、未検証ランタイムへの正式対応を主張しない。
+
+## 11. 実装結果・調査まとめ（実測で更新）
+
+### 11.1 実際の WASM コンパイルエラー
+
+当初ドキュメントの「Rayon parallel iterator が障壁」という説明は不正確だった。実際の
+最初のエラーは halo2-axiom の feature 設計:
+
+```text
+error: The multicore feature flag is not supported on wasm32 architectures without atomics
+ --> halo2-axiom-0.5.3/src/multicore.rs:6:1
+```
+
+`halo2-axiom` 0.5.3 は `default = ["batch", "multicore", "circuit-params"]` であり、
+`halo2-base` が default features のまま依存するため、`multicore` が必ず有効になる。
+`halo2-axiom` 自身が `#[cfg(not(feature = "multicore"))]` の逐次実装を持ち、
+`rayon` 1.12+ は wasm で single-thread fallback を持つ。障壁は「Rayon 非対応」ではなく
+「default feature が wasm 非対応」だった。
+
+### 11.2 採用方針: B（最小パッチ）
+
+- `rustcrypto-ffi/third_party/halo2-axiom-0.5.3` に crates.io 0.5.3 を vendoring。
+- 必須変更は `Cargo.toml` / `Cargo.toml.orig` の default feature から `multicore` を外す
+  1 行。
+- 追加で warning cleanup を実施: `thread-safe-region` feature の宣言、
+  `cargo fix` による lifetime/未使用 import 修正、native/wasm の cfg 分離、
+  deprecated `GenericArray::as_slice` の置換、未使用 `PointIndex` の削除。
+  詳細は `third_party/PATCH.md`。
+- `[patch.crates-io]` で path を指定し、`Cargo.lock` を更新。
+- native は `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` で
+  `halo2-axiom = { features = ["multicore"] }` を明示し、並列性能を維持。
+- 由来・checksum・commit・diff・更新手順・upstream 還元候補は
+  `rustcrypto-ffi/third_party/PATCH.md` に記録。
+
+### 11.3 実測結果
+
+| 項目 | 結果 |
+|---|---|
+| Native Linux x86_64 | `cargo test --locked` 全 163 + 6 tests pass、Nim 全テスト pass |
+| `wasm32-unknown-unknown` archive | build 成功、Halo2 4 symbols あり |
+| `wasm32-wasip1` archive | build 成功、Halo2 4 symbols あり |
+| `wasm32-wasip1` 実行 | Node 24 `node:wasi` で fixture 正例、改変 instance、trailing proof、truncated VK/proof、trailing instances、改変 params、非canonical instance の負例 pass |
+| `wasm32-unknown-unknown` 実行 | Node 24 `WebAssembly` で cdylib export を実行し同じ正負ケース pass |
+| wasm archive size | unknown-unknown 約 33.1 MB、wasip1 約 32.2 MB（この build） |
+| Nim wasm | `--cpu:wasm32 --os:linux` + wasm archive 指定で型チェック成功。Nim 2.2 に wasip1 OS がなく link/run は未実施 |
+
+### 11.4 wasm 固有の修正・注意
+
+- `parse_protocol` の `num_instance` 合計を `usize` で加算していたため、wasm32
+  (32-bit usize) で debug overflow panic の可能性があった。`u64` + `checked_add`
+  に変更。
+- wasm は `panic = "abort"` のため `catch_unwind` は panic を捕捉できない。
+  params/VK/proof/instances の長さ・canonical field・curve/subgroup・instance 形状は
+  proof-system 呼び出し前に検証し、外部入力の不正は status code / `false` で返す。
+  VK は信頼済み入力という既存契約を維持する。
+- verifier 経路は乱数・OS I/O・filesystem・clock・WASI syscall を要求しない。
+  `wasm32-unknown-unknown` 実行では未使用の getrandom/wasm-bindgen imports を
+  「呼ばれたら失敗する」stub にして、実行経路が entropy を要求しないことも確認。
+
+### 11.5 追加実装（並列タスク）
+
+初回実装後の残タスクを独立 4 タスクに分割し、並列で実装した。
+
+| タスク | 担当ファイル | 内容 | 結果 |
+|---|---|---|---|
+| A | `examples/halo2_fixture_multi.rs`, `tests/fixtures/halo2_kzg_bn254_multi_v1.hex`, `tests/halo2_multi_fixture.rs`, `tests/algorithm/test_halo2_multi.nim`, `tests/test_algorithm.nim` | K=10、2 advice / 2 instance 列、各 2 public value の fixture。生成時に halo2-axiom native `verify_proof` で differential 確認 | pass |
+| B | `tests/halo2_robustness.rs` | NULL/zero/oversized/truncated/trailing/header/bincode length/instance overflow/noncanonical と 2000 回の bounded mutation fuzz | pass（初回 fuzz が panic を検出、下記修正） |
+| C | `tests/algorithm/test_halo2.nim` | wrong VK/SRS、raw FFI NULL/zero-length、50 回繰り返し、validate 境界 | 17 tests pass |
+| D | `.github/workflows/release.yml` | Linux/macOS consumer install で Halo2 import + 328-byte params validate を実行し symbol link を強制 | YAML/local link pass |
+
+B の fuzz は VK の 1 byte 改変（VK offset 444, xor 0x39）で
+`snark-verifier` の `evaluations.remove(query).unwrap()` panic を検出した。
+wasm の `panic=abort` では致命的なため、`parse_protocol` に
+`validate_protocol_shape` を追加し、verifier 呼び出し前に以下を拒否するようにした:
+
+- duplicate / missing evaluation・query keys
+- query polynomial index の範囲（quotient slot を含む）
+- rotation の範囲（i32::MIN を含む）
+- instance query と evaluation map の整合性
+- accumulator index の instance 列・行範囲
+- chunk degree 0 / 過大、witness/challenge/query 総数の上限
+- `domain_as_witness` と非 v1 linearization slot
+
+修正後、B の fuzz 11 tests（回帰テスト追加で 12）と valid fixture 2 種がすべて pass。
+深い bincode 再帰は 2 MiB 上限の範囲で追加の深さ制限を持たず、信頼済み VK 前提の
+残余リスクとして docs に明記した。
+
+最終統合: `./test.sh`（Rust 全 tests + 両 wasm build + Halo2 native/WASI/unknown-unknown
+smoke + Nim 全 tests）が pass。
+
+CI 追補: Groth16 / Bulletproofs R1CS と同じ役割分担に揃えた。
+`.github/workflows/test.yml` の `ZKP integration` ジョブだけが
+`ci/test_halo2_wasm.sh`（native/WASI/unknown-unknown smoke、symbol 検査、
+`environment.txt` / `symbols.txt` artifact）を実行する。`test.sh` は汎用の
+`cargo test` / `nimble test` と両 wasm archive build のみを行い、Halo2 専用の
+example smoke は重複実行しない。native Halo2 の Rust/Nim テストは `test.sh`
+（Linux Docker / macOS ジョブ）側で引き続き実行される。
+
+### 11.6 halo2-axiom の warning 対策
+
+`cargo fix --lib -p halo2-axiom` を vendored crate に適用し、機械修正可能な
+lifetime / 未使用 import / no-op attribute を修正した。加えて、native と wasm で
+必要 import が異なるため `cfg(feature = "multicore")` で分離し、未宣言だった
+`thread-safe-region` を Cargo.toml に追加、deprecated `GenericArray::as_slice` と
+未使用 `PointIndex` を手動修正した。
+
+実行場所の方針:
+
+- ローカル修正: `ci/fix_halo2_axiom_warnings.sh`
+  （`cargo fix` 適用 + native/両 wasm の `-D warnings` 検査）
+- CI 検査: `ci/check_halo2_axiom_warnings.sh`
+  （`cargo fix` は実行せず、native/両 wasm で `-D warnings` を強制）
+- `.github/workflows/test.yml` の `ZKP integration` ジョブで CI 検査を実行。
+  CI で `cargo fix` を実行すると作業ツリーを書き換えるため、適用はローカルに限定。
+
+### 11.7 Nim wasm link の扱い
+
+このリポジトリの既存 CI には Nim の wasm 実行ターゲットがない（Nim 2.2 の OS 一覧に
+`wasip1` がなく、`--os:standalone` は std/strutils 等を満たさない）。そのため
+「Nim アプリの wasm 実行ファイル生成」は既存基盤の範囲外とし、以下を分離して記録する:
+
+- 確認済み: Rust archive の両 wasm build、4 symbols、同一 C ABI の wasm 実行、
+  Nim ソースの wasm32 型チェック、native Nim link/test。
+- 未確認: Nim コンパイラによる wasm 実行ファイルの link と実行。
+
+これは特定 WASI runtime / Browser Prover の正式対応を主張しない方針と整合する。
+
+## 参考資料
+
+- #69（既存 Halo2 Verifier 設計）、#70（Groth16 Prover）、#79（BP R1CS WASM）
+- [docs/halo2.md](https://github.com/dumblepy/nim-rustcrypto/blob/main/docs/halo2.md)
+- [Rust Verifier](https://github.com/dumblepy/nim-rustcrypto/blob/main/rustcrypto-ffi/src/halo2.rs)
+- [Native fixture generator](https://github.com/dumblepy/nim-rustcrypto/blob/main/rustcrypto-ffi/examples/halo2_fixture.rs)
+- [Nim API](https://github.com/dumblepy/nim-rustcrypto/blob/main/src/rustcrypto/algorithm/halo2.nim)
+- [Axiom Halo2](https://github.com/axiom-crypto/halo2)
+- [snark-verifier](https://github.com/axiom-crypto/snark-verifier)
+- [Project rules](https://github.com/dumblepy/nim-rustcrypto/blob/main/.agent/rules/project.mdc)
+
+設計時点の未決事項は解消済み: 実際の WASM コンパイルエラーは
+`halo2-axiom` の default `multicore` feature（Rayon 非対応ではない）。最小パッチは
+default feature から `multicore` を外す vendoring 1 行で成立し、native は target
+依存で `multicore` を明示して並列性を維持した。既存の暗号プロファイル・C ABI・wire
+format は変更していない。

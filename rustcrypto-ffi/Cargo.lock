@@ -1110,8 +1110,6 @@ dependencies = [
 [[package]]
 name = "halo2-axiom"
 version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18316396f9bc7dcd6ac1602443ea4f83f2c93fa5abe448a28db3abceb9c7aab3"
 dependencies = [
  "blake2b_simd",
  "crossbeam",
@@ -2108,6 +2106,7 @@ dependencies = [
  "genshi-core",
  "genshi-math",
  "getrandom 0.2.17",
+ "halo2-axiom",
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "hpke",
