@@ -1,0 +1,4 @@
+---
+description: 85-設計実装-halo2-ipa-spartanwhirtrusted-setup不要とposeidon2-bn254をnimrust-ffiwasmに追加 ブランチでの開発時に読み込む
+alwaysApply: false
+---
