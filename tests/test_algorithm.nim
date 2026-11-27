@@ -12,11 +12,15 @@ import ./algorithm/test_bls
 import ./algorithm/test_bn254
 import ./algorithm/test_groth16
 import ./algorithm/test_poseidon
+import ./algorithm/test_poseidon2
+import ./algorithm/test_poseidon2_umbrella
 import ./algorithm/test_plonk
 import ./algorithm/test_plonky2
 import ./algorithm/test_halo2
 import ./algorithm/test_halo2_multi
 import ./algorithm/test_halo2_umbrella
+import ./algorithm/test_halo2_ipa
+import ./algorithm/test_halo2_ipa_umbrella
 when not defined(wasm32):
   import ./algorithm/test_groth16_prover
 import ./algorithm/test_zkp_scheme_separation

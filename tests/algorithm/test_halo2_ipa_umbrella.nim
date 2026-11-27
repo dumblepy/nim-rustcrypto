@@ -1,0 +1,42 @@
+import std/strutils
+import unittest
+import ../../src/rustcrypto
+
+const Fixture = staticRead("../fixtures/halo2_ipa_bn254_v1.hex")
+
+proc fixtureValue(name: string): seq[byte] =
+  ## Parses a `NAME=hex` fixture line; accepts lowercase and uppercase hex.
+  for rawLine in Fixture.splitLines():
+    let line = rawLine.strip()
+    let separator = line.find('=')
+    if separator <= 0 or line[0 ..< separator].strip() != name:
+      continue
+    let hex = line[separator + 1 .. ^1].strip()
+    if hex.len mod 2 != 0:
+      raise newException(ValueError, "odd-length fixture hex for " & name)
+    result = newSeq[byte](hex.len div 2)
+    for i in 0 ..< result.len:
+      result[i] = byte(parseHexInt(hex[2 * i .. 2 * i + 1]))
+    return
+  raise newException(ValueError, "missing fixture value: " & name)
+
+suite "halo2 ipa through the rustcrypto umbrella module":
+  test "constants are exported":
+    check Halo2IpaBn254CircuitCubicV1 == 1'u32
+    check Halo2IpaBn254MinK == 4'u32
+    check Halo2IpaBn254MaxK == 16'u32
+    check Halo2IpaBn254MaxVkLen > 0
+    check Halo2IpaBn254MaxPkLen > 0
+    check Halo2IpaBn254MaxProofLen > 0
+    check Halo2IpaBn254MaxInstanceColumns == 8
+    check Halo2IpaBn254MaxInstanceValues == 4096
+
+  test "committed fixture verifies through the umbrella export":
+    let
+      verifyingKey = fixtureValue("VK")
+      proof = fixtureValue("PROOF")
+      instances = fixtureValue("INSTANCES")
+    check Halo2IpaBn254.validateVerifyingKey(verifyingKey)
+    check Halo2IpaBn254.validateProof(proof)
+    check Halo2IpaBn254.validatePublicInstances(instances)
+    check Halo2IpaBn254.verify(verifyingKey, proof, instances)

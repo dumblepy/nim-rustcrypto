@@ -80,7 +80,7 @@ jobs:
       - name: Install LLVM tools for symbol inspection
         run: sudo apt-get update && sudo apt-get install -y llvm
 
-      - name: Verify Halo2 FFI symbols in release archives
+      - name: Verify ZKP FFI symbols in release archives
         shell: bash
         run: |
           set -euo pipefail
@@ -94,6 +94,15 @@ jobs:
             rustcrypto_halo2_kzg_bn254_params_validate
             rustcrypto_halo2_kzg_bn254_vk_validate
             rustcrypto_halo2_kzg_bn254_instances_validate
+            rustcrypto_halo2_ipa_bn254_prepare
+            rustcrypto_halo2_ipa_bn254_prove
+            rustcrypto_halo2_ipa_bn254_verify
+            rustcrypto_halo2_ipa_bn254_vk_validate
+            rustcrypto_halo2_ipa_bn254_pk_validate
+            rustcrypto_halo2_ipa_bn254_proof_validate
+            rustcrypto_halo2_ipa_bn254_instances_validate
+            rustcrypto_poseidon2_bn254_permute
+            rustcrypto_poseidon2_bn254_hash
           )
           archives=(
             rustcrypto-ffi/target/release/librust_crypto_ffi.a
@@ -108,7 +117,7 @@ jobs:
                 exit 1
               fi
             done
-            echo "$(basename "$archive"): all Halo2 symbols present"
+            echo "$(basename "$archive"): all ZKP symbols present"
           done
 
       # 生成物を Nim パッケージの vendor 配置へ同期し、同封物としても利用できることを確認する。
@@ -152,12 +161,17 @@ jobs:
           cat > main.nim <<EOF
           import rustcrypto/algorithm/sha256
           import rustcrypto/algorithm/halo2
+          import rustcrypto/algorithm/halo2_ipa
+          import rustcrypto/algorithm/poseidon2
           import rustcrypto/algorithm/ffi
 
           doAssert sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
           var emptyHalo2Params: array[Halo2KzgBn254ParamsV1Len, byte]
           doAssert not Halo2KzgBn254.validateParams(emptyHalo2Params)
+
+          doAssert Poseidon2Bn254.hash([]).len == Bn254FrLen
+          doAssert not Halo2IpaBn254.validateVerifyingKey(newSeq[byte](20))
           EOF
           (cd "$package_dir" && nimble install -y)
           printf '%s\n' 'requires "rustcrypto >= 0.1.0"' >> consumer.nimble
@@ -291,12 +305,17 @@ jobs:
           cat > main.nim <<EOF
           import rustcrypto/algorithm/sha256
           import rustcrypto/algorithm/halo2
+          import rustcrypto/algorithm/halo2_ipa
+          import rustcrypto/algorithm/poseidon2
           import rustcrypto/algorithm/ffi
 
           doAssert sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
           var emptyHalo2Params: array[Halo2KzgBn254ParamsV1Len, byte]
           doAssert not Halo2KzgBn254.validateParams(emptyHalo2Params)
+
+          doAssert Poseidon2Bn254.hash([]).len == Bn254FrLen
+          doAssert not Halo2IpaBn254.validateVerifyingKey(newSeq[byte](20))
           EOF
           (cd "$package_dir" && nimble install -y)
           printf '%s\n' 'requires "rustcrypto >= 0.1.0"' >> consumer.nimble

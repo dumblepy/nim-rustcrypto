@@ -27,6 +27,8 @@ ed25519 = { version = "2.2.3", default-features = false, features = ["alloc", "p
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc", "pkcs8", "signature", "zeroize"] }
 genshi-core = { version = "0.3.0", default-features = false, features = ["std", "math-native"] }
 genshi-math = "0.3.0"
+# Direct dependency for the transparent IPA profile (same vendored 0.5.3 copy as KZG).
+halo2-axiom = "0.5.3"
 hkdf = "0.13.0"
 hmac = "0.13.0"
 hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
