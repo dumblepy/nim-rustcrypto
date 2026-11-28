@@ -7,9 +7,8 @@
 //!
 //! - Without `arity`, the fixed 3-input circuit id `2` is used and the default
 //!   output is `../tests/fixtures/halo2_ipa_poseidon2_v1.hex` relative to this
-//!   crate. Poseidon2 artifacts are V2 (`RCH2IPV2` / `RCH2IPP2`); the V1
-//!   pre-soundness-fix fixtures are kept as `*_legacy_v1.hex` and must be
-//!   rejected.
+//!   crate. Poseidon2 artifacts are V2 (`RCH2IPV2` / `RCH2IPP2`); V1-magic
+//!   Poseidon2 keys are not supported.
 //! - With `arity` in `0..=12`, the arbitrary-arity circuit id
 //!   `0x100 + arity` is used at its minimum `k`. For example:
 //!   `cargo run --locked --release --example halo2_ipa_poseidon2_fixture \

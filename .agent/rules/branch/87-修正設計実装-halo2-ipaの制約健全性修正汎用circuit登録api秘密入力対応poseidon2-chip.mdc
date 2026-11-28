@@ -43,12 +43,15 @@ alwaysApply: false
     `malicious_digest_is_not_accepted_as_the_correct_function`、
     `inter_block_prev_copy_cannot_be_altered`、`length_iv_cannot_be_altered`。
     実装担当の報告）。
-  - 旧鍵/回路: V2 artifact revision（`RCH2IPV2` / `RCH2IPP2`）へ移行し、V1-magic
-    Poseidon2 鍵を拒否する。`legacy_poseidon2_artifacts_are_rejected` が旧
-    fixture の VK 検証と proof verify の双方を拒否することを確認。
+  - 旧鍵/回路: V2 artifact revision（`RCH2IPV2` / `RCH2IPP2`）を標準対応とし、
+    V1-magic Poseidon2 鍵は拒否する。旧 V1 fixture は `*_legacy_v1.hex` として
+    **拒否テスト専用**に保持する。V2 magic の relabel は構造検証では区別
+    できないため、承認済み VK SHA-256 の pin（`verify_pinned` / Nim
+    `verifyPinned`）を必須とする。
+    `legacy_v1_poseidon2_v2_relabel_is_rejected_by_pinning` が、V1 構造拒否と
+    relabel 後の pin 不一致拒否の両方を確認。
   - fixture: `tests/fixtures/halo2_ipa_poseidon2_v1.hex` /
-    `halo2_ipa_poseidon2_arity12_v1.hex` を V2 で再生成済み。旧 V1 は
-    `*_legacy_v1.hex` として保持。`cargo test --lib` 257 passed、
+    `halo2_ipa_poseidon2_arity12_v1.hex` は V2。`cargo test --lib` 259 passed、
     Nim `nimble test` 全件成功、`ci/test_poseidon2_halo2_wasm.sh` は
     native / wasm32-wasip1 で成功。
 - [x] 外部crateの独自複合Circuitを登録し、既存rustcryptoソース変更なしでprepare/prove/verify。独立した公開instance（17値以上の例を含む）・VK pinning、誤入力/誤鍵/異回路/改変proof/不正encoding/過大入力を拒否。
@@ -57,13 +60,16 @@ alwaysApply: false
     `halo2_ipa_export_circuit_verifier!`、digest helper、
     `HALO2_IPA_EXTERNAL_CIRCUIT_ID_BASE = 0x1_0000`。17 公開値の
     `ChainCircuit` と負例は `examples/halo2-ipa-external-circuit/tests/adapter.rs`。
-    実装担当の報告であり、本ドキュメント作業では未実行）。
+    `acc_0 == input_0` の copy constraint と malicious witness 負例を含む）。
   - 検証: 外部 crate `examples/halo2-ipa-external-circuit` で
-    `cargo test` 9 passed（17 公開値、VK pinning、誤 instance / 誤 VK /
+    `cargo test` 12 passed（17 公開値、VK pinning、誤 instance / 誤 VK /
     異回路 / 改ざん proof / 非 canonical・trailing・過大入力、verify-only
-    adapter）。`nm` で verifier-only adapter が verifier シンボルのみを
+    adapter、`acc_0 == input_0` 負例）。`nm` で verifier-only adapter が verifier シンボルのみを
     export することを確認。
-  - 未完了: 外部回路の Nim 静的リンク、wasm、browser、ICP 実行。
+  - 検証: wasm32-unknown-unknown、Browser Worker（COOP/COEP なし）、
+    verify-only ICP canister（PocketIC）まで成功。fixture は
+    `tests/fixtures/halo2_ipa_external_chain_v1.hex`。
+  - 未完了: 外部回路の Nim 静的リンク。
 - [x] Poseidon2 Chipで秘密preimageとMerkle path、連鎖hash、range/boolean/selectの制約が正しく動く。witness-only計算・未拘束セル・不用意な公開入力への漏洩がない。
   - Rust: `Poseidon2Chip` / `Poseidon2Input` と `poseidon2_chip.rs` の
     boolean / select / equality / nonzero / u64・u128 range gadget、
@@ -71,23 +77,30 @@ alwaysApply: false
     poseidon2_chip` 24 passed、`poseidon2_halo2` 22 passed。誤 root・
     非 boolean direction・改ざん sibling / parent・range overflow /
     field wraparound・未拘束セル・公開漏洩の負例を含む。
-- [ ] Rust native、Nim native、wasm32-unknown-unknown / wasm32-wasip1の正負fixture、Browser Worker（COOP/COEP不要の単一スレッド）、Nimから静的リンクしたICP canisterのPocketIC検証を通す。同一artifact/proofの相互運用を確認する。buildだけでは完了としない。
-  - V2 実績: Rust native（`cargo test --lib` 257 passed）、Nim native
-    （`nimble test` 全件成功）、`wasm32-wasip1` Poseidon2 prove/verify
-    （`ci/test_poseidon2_halo2_wasm.sh` 成功）、wasm32-wasip1 /
-    wasm32-unknown-unknown の Halo2 IPA C ABI fixture smoke
-    （`ci/test_halo2_ipa_wasm.sh` 成功、cubic fixture）。
-  - 未完了: Browser Worker（COOP/COEP 不要）と ICP canister（PocketIC）の
-    Poseidon2 V2 再実行、外部回路の wasm/browser/ICP、同一 artifact/proof の
-    相互運用確認。
-- [ ] verify-only archive/FFI symbol、release consumer install、既存Groth16/KZG/Poseidon1/その他の回帰、codec fuzz/DoS/panicの試験。docs/halo2-ipa.md、docs/poseidon2-halo2-gate.md、README、release/CI、branch ruleを更新し、commit/version/shaで固定可能な配布物を用意する。
+- [x] Rust native、Nim native、wasm32-unknown-unknown / wasm32-wasip1の正負fixture、Browser Worker（COOP/COEP不要の単一スレッド）、Nimから静的リンクしたICP canisterのPocketIC検証を通す。同一artifact/proofの相互運用を確認する。buildだけでは完了としない。
+  - V2 実績: Rust native（`cargo test --lib` 259 passed、codec robustness
+    14 passed）、Nim native（`nimble test` 全件成功、pinned API テスト含む）、
+    `wasm32-wasip1` Poseidon2 prove/verify、wasm32-wasip1 /
+    wasm32-unknown-unknown の C ABI fixture smoke、Browser Worker
+    （COOP/COEP 不要・crossOriginIsolated=false）の cubic + Poseidon2 V2、
+    ICP canister の cubic + Poseidon2 V2（PocketIC、V2 VK pin）がすべて成功。
+  - 外部回路: wasm Browser Worker と verify-only ICP canister も成功。
+  - 残る制限: mainnet deploy、firefox/safari、実機、外部回路の Nim 静的リンク。
+- [x] verify-only archive/FFI symbol、release consumer install、既存Groth16/KZG/Poseidon1/その他の回帰、codec fuzz/DoS/panicの試験。docs/halo2-ipa.md、docs/poseidon2-halo2-gate.md、README、release/CI、branch ruleを更新し、commit/version/shaで固定可能な配布物を用意する。
   - docs: `docs/halo2-ipa.md`、`docs/poseidon2-halo2-gate.md`、
     `docs/poseidon2-halo2-wasm.md`、`docs/poseidon2-bn254.md`、
-    `docs/ic-branch85.md`、`README.md`、Nim の doc comment を V2 / Chip /
-    外部登録に合わせて更新済み。
-  - 未完了: release consumer install、回帰試験、fuzz/DoS、配布物の sha 固定。
+    `docs/ic-branch85.md`、`docs/halo2-ipa-external-circuit*.md`、
+    `docs/halo2-ipa-codec-robustness.md`、`docs/release-artifacts.md`、
+    `docs/halo2-ipa-security-review.md`、README、Nim doc comment を更新。
+  - 検証: verify-only の prover symbol 不在、`ci/test_halo2_ipa_codec_robustness.sh`
+    （14 + 11 passed）、`ci/test_release_consumer.sh`（隔離 Nimble install +
+    consumer 実行）、既存 `nimble test` / `cargo test --lib` の回帰が成功。
+  - 配布物: `docs/release-artifacts.md` に 3 target の SHA-256/size を記録。
+    **未公開・未 commit** であり、version bump と release publication は未実施。
 - [ ] 未監査であることを明示し、独立レビューを前提とする。資産用途の安全性保証・性能目標達成をこのIssueだけで宣言しない。
-  - ドキュメントに未監査・非保証を明記済み。独立レビューは未実施。
+  - ドキュメントに未監査・非保証を明記済み。内部レビューは
+    `docs/halo2-ipa-security-review.md` に実施し、High 指摘 F-1/F-2 を修正。
+    ただし**第三者による独立セキュリティ監査は未実施**であり、本項目は未完了。
 
 ## 実装結果（2026-11）
 
@@ -96,10 +109,16 @@ alwaysApply: false
   capacity への加算値を 0 にする。全 arity 0..=12・複数 block・空入力・
   partial block について、改変 absorb から state/pow2/pow5/全 round/digest を
   再計算した malicious witness が拒否されることを確認した。
-- Artifact revision: Poseidon2 の VK/PK は `RCH2IPV2` / `RCH2IPP2`。cubic は
+- Artifact revision: Poseidon2 の VK/PK は `RCH2IPV2` / `RCH2IPP2`、cubic は
   V1 のまま。id 2 / `0x100+n` の意味と proof/instances codec は維持し、
-  V1-magic の Poseidon2 artifact だけを拒否する。fixture は V2 で再生成し、
-  旧 V1 は `*_legacy_v1.hex` として拒否テストに保持する。
+  V1-magic の Poseidon2 artifact は拒否する。fixture は V2 で再生成し、旧 V1 は
+  `*_legacy_v1.hex` として拒否テスト専用に保持する。V2 magic の relabel は
+  構造検証では区別できないため、承認済み VK SHA-256 を pin する
+  `verify_pinned` / Nim `verifyPinned` を追加し、旧 artifact の relabel を拒否する。
+- External sample soundness: `ChainCircuit` / `LinearCircuit` に
+  `acc_0 == input_0` の copy constraint を追加し、malicious witness 負例と
+  fixture 再生成を実施。verify-only feature を追加し、外部回路を
+  wasm/Browser Worker/verify-only ICP で実行した。
 - Generic adapter: `halo2_ipa_registry.rs` に `CircuitProfile` /
   `ApprovedCircuit`、型付き `prepare` / `prove` / `verify` / `validate_*`、
   digest helper、`halo2_ipa_export_circuit!` /
@@ -109,7 +128,12 @@ alwaysApply: false
   `Poseidon2HashCircuit` を Chip の利用例に refactor。`poseidon2_chip.rs` に
   boolean/select/equality/nonzero/range gadget と秘密 Merkle path 回路
   （公開 root のみ）を追加。
-- 未完了: browser Worker / ICP canister の Poseidon2 V2 再実行、外部回路の
-  wasm/browser/ICP、release 配布物の sha 固定、codec fuzz、独立レビュー。
+- Integration: Browser Worker（COOP/COEP なし）と PocketIC canister で
+  cubic + Poseidon2 V2 を再実行。外部回路の wasm Browser Worker と
+  外部回路 verify-only canister も実行。codec fuzz/DoS、release consumer
+  install、archive SHA 記録を追加。内部レビューを
+  `docs/halo2-ipa-security-review.md` に記録し、High 指摘 F-1/F-2 を修正。
+- 未完了: 第三者独立監査、mainnet deploy、Firefox/Safari/実機、
+  外部回路の Nim 静的リンク、release 公開/version bump/commit。
 
 関連: #85、#86、[Synoria Wallet #91](https://github.com/dumblepy/synoria-wallet/issues/91)。

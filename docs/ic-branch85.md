@@ -124,12 +124,31 @@ pin する VK だけを circuit id 2 用に変えた canister である。
   `[patch.crates-io]` / getrandom の fail-closed stub を使う。
 - `const APPROVED_VK: &[u8] = include_bytes!(env!("HALO2_IPA_APPROVED_VK"));`
   に `tests/fixtures/halo2_ipa_poseidon2_v1.hex` の `VK` を
-  `HALO2_IPA_APPROVED_VK` で渡す。ただし Poseidon2 の P0 制約修正で VK が
-  変わったため、**V2 magic（`RCH2IPV2`）に再生成した VK を pin する**必要が
-  ある。committed fixture は V2 magic で再生成済みであり、旧 V1 は
-  `halo2_ipa_poseidon2_legacy_v1.hex` として保持している。旧 V1 VK を pin
-  した canister は現行実装が `INVALID_VERIFYING_KEY` で拒否する。canister の
-  V2 VK 再 pin・再ビルド・PocketIC 再実行は未実施である。
+  `HALO2_IPA_APPROVED_VK` で渡す。
+
+### 2.0 V2 migration status
+
+Poseidon2 の P0 制約修正（未使用 absorb lane / capacity 加算値の zero 制約）で
+VK/PK が変わったため、Poseidon2 系 artifact は **V2 magic** に移行済みである。
+この canister は移行後の状態でビルド・検証している。
+
+| 対象 | 状態 |
+|---|---|
+| VK magic | `RCH2IPV2`（cubic は `RCH2IPV1` のまま） |
+| PK magic | `RCH2IPP2`（cubic は `RCH2IPP1` のまま） |
+| fixture `tests/fixtures/halo2_ipa_poseidon2_v1.hex` | V2 で再生成済み。ファイル名の `_v1` は proof/instances codec（`RCH2IPF1` / `RCH2IPI1`）の版を指す |
+| VK pinning（本 canister） | V2 fixture の `VK` を `HALO2_IPA_APPROVED_VK` で pin 済み。wasm を再ビルド済み |
+| 旧 V1 artifact | リポジトリには含めない。現行実装は V1-magic の Poseidon2 VK/PK を `INVALID_VERIFYING_KEY` で拒否する |
+| PocketIC smoke | V2 VK で status 0、改変 proof / instance は status 8（§2.3） |
+
+旧 V1 VK を pin したままの既存デプロイは、新しい V2 proof を検証できない。
+V2 の proof を検証するには V2 VK を pin した canister への再デプロイが必要で
+ある。V1-magic の旧 artifact は現行実装が拒否するが、**V2 magic に付け替えた
+旧 V1 payload は magic 検査だけでは拒否できない**。したがって V2 magic は
+artifact の認可境界ではなく、承認済み VK digest（SHA-256）の pin が必須である。
+この canister はビルド時に V2 VK 全体を `include_bytes!` で pin しており、
+VK の差し替えにはコード変更・再ビルド・レビューを要する。
+
 - raw な `canister_update verify` を公開し、任意の VK / witness / params /
   prover / RNG は受け付けない。
 
@@ -160,39 +179,42 @@ reply = i32 status LE || u64 verifier instructions LE || u32 pages LE   (16 byte
 - 引数全体が `4 MiB（proof）+ 1 MiB（instances）+ 12 bytes` を超える場合は
   コピー前に `9` を返す（mock `ic0` で `msg_arg_data_copy` 未呼び出しを確認）。
 
-### 2.3 実測（この run）
+### 2.3 実測（V2, この run）
 
-> 以下は **P0 制約修正前（V1 artifact）** の記録である。V1 VK は現行実装では
-> 受理されないため、V2 fixture の再生成後に canister を再ビルドし、PocketIC で
-> 再計測する必要がある。数値を V2 の保証として引用しないこと。
-
-測定環境は §1 と同じ（Node `v24.22.1`、`@dfinity/pic` 0.25.0、release +
-fat LTO + `strip = "symbols"`）。fixture は k=8、proof 5,612 bytes、
-instances 144 bytes、VK 1,214 bytes。
+V2 fixture と V2 VK pin で PocketIC を実行した結果である。測定環境は §1 と
+同じ（Node `v24.22.1`、`@dfinity/pic` 0.25.0、release + fat LTO +
+`strip = "symbols"`）。fixture は k=8、proof 5,612 bytes、instances 144 bytes、
+VK 1,214 bytes。
 
 | 項目 | cold | warm |
 |---|---:|---:|
 | status | 0 | 0 |
-| `performance_counter` 差分 (instructions) | 18,523,734,643 | 865,660,902 |
+| `performance_counter` 差分 (instructions) | 18,524,357,555 | 866,284,259 |
 | wasm memory | 54 pages / 3,538,944 bytes | 54 pages / 3,538,944 bytes |
-| PocketIC update cycles（参考） | 18,542,200,989 | — |
-| wasm size | 2,810,841 bytes | 同左 |
-| wasm functions（import + defined） | 5 + 451 = 456 | 同左 |
+| PocketIC update cycles（参考） | 18,542,823,901 | — |
+| wasm size | 2,820,730 bytes | 同左 |
+| wasm functions（import + defined） | 5 + 456 = 461 | 同左 |
 | wasm imports | `ic0` 5 関数のみ | 同左 |
 
 - cold は `ParamsIPA::new(8)` の決定的な params 生成が支配的である。
 - warm は `halo2-ipa-params-cache` により同一 canister instance の 2 回目で
   params を clone するだけであり、cold の約 1/21。heap のみで upgrade /
   reinstall で失われ、stable memory へ永続化しない。
-- 改変 proof / 改変 instance は status `8`、5 MiB 超は status `9` かつ
-  コピー前に拒否。
+- proof / instance 改変はともに status `8`、oversized（5 MiB + 1 byte、
+  mock `ic0`）は status `9` かつ `msg_arg_data_copy` 前に拒否。
 - wasm import は `msg_arg_data_size`、`msg_arg_data_copy`、
   `performance_counter`、`msg_reply_data_append`、`msg_reply` の `ic0` 5 関数
   のみ。`__wbindgen` / `getrandom` / Web Crypto の import は無い。
-- Poseidon2 VK の SHA-256:
-  `c7569f8e59692d914d56f1a9e5f0aab5e786922c1cbfe8d0bc3c4a732854b4ce`。
-  proof の SHA-256:
-  `d6a2956b99163c59b098ad74eaddd3fb6316bbd69d9f212ec66bf9fac12df7c5`。
+- Poseidon2 V2 VK の SHA-256:
+  `2dd45d84727cdeae9b23ace1a12bcb8d86d9b1a516b6ee0058867da02e063f7e`。
+  V2 proof の SHA-256:
+  `3db634800dc64ca1218056743cb2c328d012a689405c399622313d791b3c27cf`。
+- V1-magic Poseidon2 VK の拒否は PocketIC smoke ではなく Rust の
+  `poseidon2_uses_v2_magic_and_rejects_v1_relabel` で確認する（VK validate が
+  `INVALID_VERIFYING_KEY`、PK validate が `INVALID_CIRCUIT_DATA` を返す）。
+- この run の wasm SHA-256:
+  `422b6eb8cee279ebb9d65994ca30b847938978a23aae1e175b22a679d8bcbbab`
+  （ツールチェーン / profile 依存）。
 
 ---
 
@@ -217,6 +239,20 @@ reply = i32 status LE || u64 instructions LE || u32 pages LE || digest (32 bytes
 ---
 
 ## 4. ビルドと実行
+
+V2 検証の実行コマンド（この run）:
+
+```bash
+cd /application
+ZKP_RUST_WASM_TARGETS_INSTALLED=1 \
+  bash ci/test_ic_branch85.sh /tmp/opencode/ic-v2
+```
+
+結果: exit 0。3 canister（cubic IPA / Poseidon2 IPA V2 / Poseidon2 hash）の
+ビルドと PocketIC smoke がすべて成功し、`/tmp/opencode/ic-v2/ic-measurements.json`
+を出力した。V2 fixture の VK magic は `RCH2IPV2`、Poseidon2 IPA の V2 verify は
+status 0、改変 proof / instance は status 8、oversized / bad envelope /
+non-canonical は非 0 で拒否された。
 
 ```bash
 # 成果物ディレクトリを指定（省略時は mktemp）
@@ -280,17 +316,17 @@ node web/ic-branch85/ic-smoke.cjs /tmp/ic-branch85 \
 
 測定環境: Node `v24.22.1`、`@dfinity/pic` 0.25.0、`opt-level = 3`、fat LTO、
 `codegen-units = 1`、`strip = "symbols"`。fixture は k=8、proof 1164 bytes、
-instances 48 bytes。下表は cubic verifier と Poseidon2 hash の既存記録である。
-circuit id 2 の Poseidon2 IPA verifier の実測は §2.3 に記載する。
+instances 48 bytes。下表はこの V2 run の cubic verifier と Poseidon2 hash の
+記録である。circuit id 2 の Poseidon2 IPA verifier の実測は §2.3 に記載する。
 
 | 項目 | Halo2 IPA verify (cold) | Halo2 IPA verify (warm) | Poseidon2 hash [1,2,3] |
 |---|---:|---:|---:|
 | status | 0 | 0 | 0 |
-| `performance_counter` 差分 (instructions) | 18,226,479,635 | 568,422,557 | 866,665 |
+| `performance_counter` 差分 (instructions) | 18,226,479,776 | 568,422,553 | 866,665 |
 | wasm memory | 53 pages / 3,473,408 bytes | 53 pages / 3,473,408 bytes | 18 pages / 1,179,648 bytes |
-| PocketIC update cycles（参考） | 18,235,848,863 | — | 7,996,578 |
-| wasm size | 2,809,674 bytes | 同左 | 149,430 bytes |
-| wasm functions（import + defined） | 5 + 452 = 457 | 同左 | 5 + 73 = 78 |
+| PocketIC update cycles（参考） | 18,235,849,004 | — | 7,996,578 |
+| wasm size | 2,819,643 bytes | 同左 | 149,430 bytes |
+| wasm functions（import + defined） | 5 + 456 = 461 | 同左 | 5 + 73 = 78 |
 | wasm imports | `ic0` 5 関数のみ | 同左 | `ic0` 5 関数のみ |
 
 `cold` は canister インスタンスでの最初の検証、`warm` は同じインスタンスでの
@@ -298,9 +334,10 @@ circuit id 2 の Poseidon2 IPA verifier の実測は §2.3 に記載する。
 命令数が約 32 分の 1 になっている（18.2B → 0.57B）。`updateCyclesDebited` は
 cold 呼び出しの値のみを示す。warm の cycles は個別には記録していない。
 
-Poseidon2 追加後の再実行では、cubic は cold
-18,226,479,760 instructions、wasm 2,809,753 bytes、5 + 451 = 456 functions
-であった。toolchain / LTO により命令数・モジュールサイズはこの程度変動する。
+Poseidon2 V2 IPA verifier の実測は §2.3 に記載する（cold
+18,524,357,555 instructions、warm 866,284,259、54 pages、wasm
+2,820,730 bytes、5 + 456 = 461 functions）。toolchain / LTO により命令数・
+モジュールサイズはこの程度変動する。
 
 IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
 `performance_counter`、`msg_reply_data_append`、`msg_reply` のみ。
@@ -324,16 +361,20 @@ IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
   上限だが、暗号学的な安全性の主張ではない。
 - VK の SHA-256（fixture 抽出時）:
   `4b622f52e34feb5307d5156e7fe3d6be2b7cc8a14cb426548545b03ddadc8b5e`。
+  Poseidon2 V2 VK は §2.3 を参照。
 - この実行の wasm SHA-256（ツールチェーン・profile 依存）:
-  IPA `b827a5f73e8be59fdf50f5bf82c4943f7c5a3174d8f5a5060fadfcff21c43270`、
-  Poseidon2 `1df97972bb9e08457c0b1f9d4b2a0cf400d71bd6f236bd1360e5f61cadc0701a`。
+  cubic IPA `92fd8031254aaa66e74395cf3a1e1dc3f384f98d42e37b221753db6ecffe4374`、
+  Poseidon2 hash `1df97972bb9e08457c0b1f9d4b2a0cf400d71bd6f236bd1360e5f61cadc0701a`、
+  Poseidon2 IPA は §2.3 を参照。
 
 ---
 
 ## 6. 再現性
 
-- fixture は `tests/fixtures/halo2_ipa_bn254_v1.hex`（cubic）と
-  `tests/fixtures/halo2_ipa_poseidon2_v1.hex`（id 2）に固定。
+- fixture は `tests/fixtures/halo2_ipa_bn254_v1.hex`（cubic, V1）と
+  `tests/fixtures/halo2_ipa_poseidon2_v1.hex`（id 2, V2 magic）に固定。
+  Poseidon2 は V2 のみをサポートし、旧 V1 は `*_legacy_v1.hex` として拒否
+  テスト専用に保持する。
 - 3 つの example crate に `Cargo.lock` を commit し、`--locked` でビルドする。
 - `halo2-axiom` は `rustcrypto-ffi/third_party/halo2-axiom-0.5.3` を
   `[patch.crates-io]` で参照（`multicore` 既定 off の vendored copy）。
@@ -355,9 +396,12 @@ IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
 - Poseidon2 IPA verifier も **verify 専用**であり、canister 内での proving /
   keygen は実装・試行していない。ブラウザ Worker での prove と ICP での
   verify は別経路である。この canister が pin するのは circuit id 2（3 入力固定）
-  の V2 VK であり、現在の V1 fixture / V1 pin のままでは動作しない。V2 VK の
-  再生成・再 pin・PocketIC 再実行は未実施。C ABI/Nim の任意 arity `0x100+n`
-  用の VK は別途ビルド・pin が必要。
+  の V2 VK であり、V2 fixture（`RCH2IPV2`）と V2 pin で PocketIC 実行済みで
+  ある（§2.3 / §4）。旧 V1 VK を pin した既存デプロイは V2 proof を検証できない
+  ため、再デプロイが必要である。V1 VK は現行実装が `INVALID_VERIFYING_KEY` で
+  拒否する（Rust の `poseidon2_uses_v2_magic_and_rejects_v1_relabel` で確認）。
+  C ABI/Nim の任意 arity
+  `0x100+n` 用の VK は別途ビルド・pin が必要。
 - ブラウザ検証は headless Chromium のみで、Firefox / Safari は未検証。
 - **IPA params cache**: `halo2-ipa-params-cache` により同一 canister インスタンス
   内の warm call は params を再生成しない。ただし単一 thread-local スロットの

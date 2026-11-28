@@ -312,6 +312,12 @@ proc verify*(
   ## Rust core). The verification path must not require caller entropy,
   ## filesystem, clock, threads, or network; the wasm runtime smoke enforces
   ## that contract by throwing on every host import.
+  ##
+  ## **Security**: this compatibility entry point trusts the caller-supplied
+  ## `verifyingKey`. Structural/magic checks cannot distinguish a legacy V1
+  ## Poseidon2 VK whose magic was rewritten to `RCH2IPV2`. For approved
+  ## artifacts, pin the SHA-256 of the complete VK envelope and use
+  ## `verifyPinned` instead.
   if verifyingKey.len < Halo2IpaBn254VkHeaderLen or
       verifyingKey.len > Halo2IpaBn254MaxVkLen:
     raise newException(ValueError, "Halo2IpaBn254.verify: invalid verifying key length")
@@ -339,6 +345,91 @@ proc verify*(
     result = false
   else:
     raiseRustCryptoStatus(status, "rustcrypto_halo2_ipa_bn254_verify")
+
+proc verifyPinned*(
+    T: type Halo2IpaBn254;
+    verifyingKey: openArray[byte];
+    expectedVkSha256: openArray[byte];
+    proof: openArray[byte];
+    publicInstances: openArray[byte];
+): bool =
+  ## Verifies a proof only if the **complete** verifying-key envelope matches
+  ## `expectedVkSha256` (exactly 32 bytes, SHA-256), then verifies against the
+  ## expected public instances.
+  ##
+  ## This is the secure path for approved artifacts. The unpinned `verify`
+  ## trusts its caller-supplied VK; rewriting only the 8-byte V1 magic to
+  ## `RCH2IPV2` on a legacy Poseidon2 VK remains structurally valid and is
+  ## accepted by `verify`. Pinning the independently distributed digest of the
+  ## approved V2 VK rejects that relabel before params are generated.
+  ##
+  ## The digest is checked before the VK is parsed or `ParamsIPA` is derived,
+  ## so an unapproved VK cannot force params generation. Returns `false` only
+  ## for a structurally valid but invalid proof. A digest mismatch raises with
+  ## `RustCryptoErrInvalidVerifyingKey`.
+  if verifyingKey.len < Halo2IpaBn254VkHeaderLen or
+      verifyingKey.len > Halo2IpaBn254MaxVkLen:
+    raise newException(
+      ValueError, "Halo2IpaBn254.verifyPinned: invalid verifying key length"
+    )
+  if expectedVkSha256.len != Halo2IpaBn254VkDigestLen:
+    raise newException(
+      ValueError,
+      "Halo2IpaBn254.verifyPinned: expected VK SHA-256 must be exactly " &
+        $Halo2IpaBn254VkDigestLen & " bytes",
+    )
+  if proof.len < Halo2IpaBn254ProofHeaderLen or
+      proof.len > Halo2IpaBn254MaxProofLen:
+    raise newException(
+      ValueError, "Halo2IpaBn254.verifyPinned: invalid proof length"
+    )
+  if publicInstances.len < Halo2IpaBn254InstancesHeaderLen or
+      publicInstances.len > Halo2IpaBn254MaxInstancesBlobLen:
+    raise newException(
+      ValueError,
+      "Halo2IpaBn254.verifyPinned: invalid public instances length",
+    )
+
+  let status = halo2IpaBn254VerifyPinnedRaw(
+    bytesPtr(verifyingKey),
+    csize_t(verifyingKey.len),
+    bytesPtr(expectedVkSha256),
+    csize_t(expectedVkSha256.len),
+    bytesPtr(proof),
+    csize_t(proof.len),
+    bytesPtr(publicInstances),
+    csize_t(publicInstances.len),
+  )
+  case status
+  of RustCryptoOk:
+    result = true
+  of RustCryptoErrVerificationFailed:
+    result = false
+  else:
+    raiseRustCryptoStatus(status, "rustcrypto_halo2_ipa_bn254_verify_pinned")
+
+proc validateVerifyingKeyPinned*(
+    T: type Halo2IpaBn254;
+    verifyingKey: openArray[byte];
+    expectedVkSha256: openArray[byte];
+): bool =
+  ## Validates the VK envelope **and** checks that its complete SHA-256 digest
+  ## equals `expectedVkSha256` (exactly 32 bytes).
+  ##
+  ## The structural validator alone accepts a legacy V1 Poseidon2 payload
+  ## relabelled with `RCH2IPV2`; pinning the approved digest is what rejects it.
+  ## This never generates IPA params.
+  if verifyingKey.len < Halo2IpaBn254VkHeaderLen or
+      verifyingKey.len > Halo2IpaBn254MaxVkLen:
+    return false
+  if expectedVkSha256.len != Halo2IpaBn254VkDigestLen:
+    return false
+  halo2IpaBn254VkValidatePinnedRaw(
+    bytesPtr(verifyingKey),
+    csize_t(verifyingKey.len),
+    bytesPtr(expectedVkSha256),
+    csize_t(expectedVkSha256.len),
+  ) == RustCryptoOk
 
 proc validateVerifyingKey*(T: type Halo2IpaBn254; verifyingKey: openArray[byte]): bool =
   ## Validates the VK envelope, including the embedded `halo2_axiom` key. The

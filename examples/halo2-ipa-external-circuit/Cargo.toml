@@ -16,7 +16,16 @@ crate-type = ["staticlib", "rlib"]
 rustcrypto-ffi = { path = "../../rustcrypto-ffi" }
 halo2-axiom = { version = "0.5.3" }
 
+[features]
+default = []
+# Emit only the verifier adapter symbols (no prepare/prove) and build
+# rustcrypto-ffi without its prover/keygen code paths.
+verify-only = ["rustcrypto-ffi/halo2-ipa-verify-only"]
+
 # Use the same vendored halo2-axiom copy as rustcrypto-ffi so the `Circuit`
 # trait and key types are the same crate instance across the dependency graph.
 [patch.crates-io]
 halo2-axiom = { path = "../../rustcrypto-ffi/third_party/halo2-axiom-0.5.3" }
+
+[dev-dependencies]
+rand = { version = "0.8", features = ["std_rng"] }

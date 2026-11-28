@@ -1101,6 +1101,7 @@ name = "halo2-ipa-external-circuit"
 version = "0.1.0"
 dependencies = [
  "halo2-axiom",
+ "rand 0.8.8",
  "rustcrypto-ffi",
 ]
 

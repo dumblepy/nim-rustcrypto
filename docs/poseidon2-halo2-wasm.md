@@ -54,7 +54,7 @@ bash ci/test_poseidon2_halo2_wasm.sh /tmp/poseidon2-halo2-wasm
 > **V2 再計測済み**: 以下は P0 制約健全性修正後の V2 artifact
 > （`RCH2IPV2` / `RCH2IPP2`）で再実行した記録である。KAT digest は V1 と
 > 同じで、未使用 absorb lane の zero 制約により VK/PK は新しい revision に
-> なっている。旧 V1 の fixture / VK は現行実装では拒否される。
+> なっている。Poseidon2 は V2 のみをサポートし、V1 fixture / VK は保持しない。
 
 環境:
 
@@ -144,10 +144,10 @@ instance 列に拘束する。
 
 - **このドキュメントの範囲は wasm32-wasip1**。wasm32-unknown-unknown の
   browser / Web Worker での prove は別途完了しており、circuit id 2 を
-  Chromium で prepare/prove/verify 済み（
+  **Poseidon2 V2 で** Chromium 上で prepare/prove/verify 済み（
   [`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md)）。
-  ICP は circuit id 2 の verify-only canister を PocketIC で実行済みで、
-  canister 内 proving は未試行。
+  ICP は circuit id 2 の **V2 VK を pin した** verify-only canister を PocketIC
+  で実行済みで、canister 内 proving / keygen は未実装・未試行。
 - **ブラウザ実行の詳細は別ドキュメント**: COOP/COEP なし・
   `crossOriginIsolated=false` の構成は
   [`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md) を参照。
@@ -160,8 +160,7 @@ instance 列に拘束する。
   circuit id レジストリに `circuit_id=2`（3 入力固定）と `0x100+n`
   （任意 arity、n=0..=12）として登録されている。鍵 artifact は **V2**
   （`RCH2IPV2` / `RCH2IPP2`）であり、旧 V1-magic の Poseidon2 VK/PK は拒否
-  される。fixture は V2 で再生成済みで、wasm32-wasip1 の V2 再実行も完了
-  している。
+  される。fixture は V2 のみで、wasm32-wasip1 の V2 実行も完了している。
 - **Chip の wasm 実行は未検証**: `Poseidon2Chip` は Rust の回路部品であり、
   この smoke は単体 `Poseidon2HashCircuit` を実行する。Chip を使う複合回路の
   wasm 実行は別途検証が必要。

@@ -23,6 +23,21 @@ requires "https://github.com/itsumura-h/nim-rustcrypto"
 
 On Linux x86_64, `nimble add` / `nimble install` automatically downloads and unpacks the Rust FFI static archive from GitHub Release, so normal consumers do not need Rust installed. Use `nimble fetchRustFfi` or `nimble buildRustFfiLocal` only when you need to refresh the archive during development.
 
+### Release consumer install check
+
+`bash ci/test_release_consumer.sh` builds the native, `wasm32-unknown-unknown`, and
+`wasm32-wasip1` static archives, syncs them into the package vendor tree, installs
+the package into an isolated temporary `NIMBLE_DIR`, and builds/runs `example/`
+against that installation. It prints the SHA-256 and size of all three archives.
+The release assets themselves are not published or committed by this check; see
+[release artifacts](docs/release-artifacts.md) for the exact commands, the current
+measured hashes, and how to pin a future release by version + SHA-256.
+
+The installed archives must contain the **V2 Poseidon2 artifacts**
+(`RCH2IPV2` / `RCH2IPP2`). Do not treat an old V1-magic Poseidon2 archive as the
+fixed circuit: V1 Poseidon2 keys are rejected, and only cubic circuit id 1 keeps
+the V1 envelopes.
+
 ## Target support
 
 Linux x86_64, macOS arm64, `wasm32-unknown-unknown`, and `wasm32-wasip1` ship Rust FFI
@@ -47,10 +62,10 @@ run are included.
 > unused sponge absorb lane and the capacity addend, which changes the Poseidon2
 > VK/PK. Poseidon2 keys now use the V2 envelopes `RCH2IPV2` / `RCH2IPP2`; cubic
 > id 1 keeps V1 `RCH2IPV1` / `RCH2IPP1`, and proof/instances stay `RCH2IPF1` /
-> `RCH2IPI1`. Old V1-magic Poseidon2 artifacts are rejected, so the committed
-> Poseidon2 fixtures and the wasm/browser/ICP results recorded above (measured
-> against the old V1 circuit) must be regenerated and re-run. Do not accept a
-> pinned old VK/proof as the new circuit.
+> `RCH2IPI1`. Poseidon2 supports **V2 only**: V1-magic Poseidon2 keys are
+> rejected, and the V1 fixture/artifact is not shipped. The committed Poseidon2
+> fixtures and the wasm/browser/ICP results above are V2. Do not accept a pinned
+> old V1 VK/proof as the new circuit.
 
 The same profile now exposes a reusable **`Poseidon2Chip`** (pass already-assigned
 cells, copy-constrain them, publish only caller-selected cells) and a compile-time

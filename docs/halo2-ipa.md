@@ -52,8 +52,8 @@ revision の意味と移行手順は
 
 - `0x100 + 0` 〜 `0x100 + 12`（十進 `256`〜`268`）が任意 arity 回路。
 - 旧来の `2` は **3 入力固定** の別 id として残す。id の意味（3 入力・
-  witness 96 バイト・公開入力 4 値）は維持するが、**鍵 artifact は V2 であり、
-  V1 時代の VK/PK は受理しない**。旧 fixture / pin は再生成が必要である。
+  witness 96 バイト・公開入力 4 値）は維持するが、**鍵 artifact は V2 のみで
+  あり、V1 時代の VK/PK は受理しない**。旧 pin は V2 で再生成が必要である。
 - `poseidon2_arity(circuit_id)` は id `2` を `3`、`BASE + n` を `n`、それ以外を
   `None` として返す。
 
@@ -66,9 +66,13 @@ arity `0..=3` は `k = 7`、`4..=9` は `k = 8`、`10..=12` は `k = 9` にな�
 
 - 回路の追加は **Rust ソース変更 + レビュー** を必須とする。入力バイト列から
   任意の回路コードをロードすることはない。
-- 本モジュールが行うのは構造検証と証明検証だけである。**どの VK を信頼するか
-  （回路・バージョンへのピン留め）はアプリケーションの責任**。VK のハッシュを
-  固定するなどを推奨する。
+- 本モジュールが行うのは構造検証と証明検証だけである。**解析結果（magic・
+  circuit id・内部 VK）は承認済み artifact の認可境界ではない**。V1
+  Poseidon2 VK の先頭 8 バイトを `RCH2IPV2` に書き換えただけの envelope も
+  自己整合な VK として decode できるため、**承認済み VK の SHA-256 digest を
+  呼び出し側で pin し、`verify_pinned` / Nim `verifyPinned` を使うことを必須**
+  とする。詳細は
+  [「VK pinning は承認済み artifact の必須条件」](#vk-pinning-は承認済み-artifact-の必須条件f-1)。
 - `circuit_id` が未知の場合は `INVALID_CIRCUIT_DATA`（`prepare` では
   `INVALID_PARAMETER`）を返す。
 
@@ -107,40 +111,128 @@ witness を作れる。修正後はそのような witness を `MockProver` が�
 
 ### 旧 V1 Poseidon2 artifact の扱い
 
-**旧 V1-magic の Poseidon2 VK/PK は受理しない。** 脆弱な互換経路は残さない。
+**旧 V1-magic の Poseidon2 VK/PK は構造検証で拒否する。** ただし、これは
+「旧 payload を V2 として受理する経路が無い」ことを意味しない。
 
 - `Halo2IpaBn254.validateVerifyingKey` / `rustcrypto_halo2_ipa_bn254_vk_validate`
   は V1-magic の Poseidon2 VK を `INVALID_VERIFYING_KEY` で拒否する。
-- `verify` も VK の decode 前に同じ理由で拒否する。したがって **旧 V1 VK を
-  pin したまま旧 proof を検証することはできない**。
+- `verify` も V1-magic の VK を decode 前に同じ理由で拒否する。
 - `validateProvingKey` / `pk_validate` も V1-magic の Poseidon2 PK を拒否する。
   旧 PK からの prove は失敗する。
-- 旧 proof（`RCH2IPF1`）は形式としては読めるが、旧 V1 回路の制約系に対する
-  証明であり、V2 VK（新しい回路の鍵）とは対応しない。旧 V1 VK は拒否される
-  ため、旧 proof が受理される経路はない。
+- **しかし V1 magic を V2 magic に置換しただけの旧 payload は、自己整合な
+  VK として parse でき、magic 検査を通過する。** この relabel を検出できる
+  のは承認済み VK digest の pin だけである（下節 F-1）。旧 V1 の proof も、
+  relabel された旧 VK に対しては unpinned `verify` で通る。したがって
+  `verify` 単体を承認境界として使ってはならない。
 
 移行時は VK / PK / proof / instances を **すべて再生成**し、アプリケーションが
 pin している VK のハッシュ・fixture・ICP canister の `APPROVED_VK`・browser
 配布物を更新する。旧 artifact を「互換モード」で受け付ける設定は用意しない。
+旧 V1 VK をそのまま pin したまま旧 proof を検証する経路もないが、V2 magic に
+書き換えた旧 payload を拒否するには digest pin が必要である。
+
+### VK pinning は承認済み artifact の必須条件（F-1）
+
+内部レビュー F-1 の指摘: V2 magic は artifact revision のラベルにすぎず、
+payload が健全化後の回路の VK であることを証明しない。旧 V1 Poseidon2 VK の
+8 バイト magic を `RCH2IPV2` に置換すると、`vk_validate` と unpinned `verify`
+は旧 VK / 旧 proof を受理した（`validate=0`, `verify=0`）。**構造解析だけでは
+旧 VK と承認済み V2 VK を区別できない。**
+
+修正として、complete VK envelope の SHA-256 digest を照合する first-class API
+を追加した。digest は magic・`circuit_id`・`k`・payload 長・payload 全体を
+被覆するため、magic の書き換えでも値が変わる。
+
+```c
+int rustcrypto_halo2_ipa_bn254_verify_pinned(
+    const uint8_t *vk_ptr, size_t vk_len,
+    const uint8_t *vk_sha256_ptr, size_t vk_sha256_len,  /* exactly 32 bytes */
+    const uint8_t *proof_ptr, size_t proof_len,
+    const uint8_t *instances_ptr, size_t instances_len);
+
+int rustcrypto_halo2_ipa_bn254_vk_validate_pinned(
+    const uint8_t *vk_ptr, size_t vk_len,
+    const uint8_t *vk_sha256_ptr, size_t vk_sha256_len);
+```
+
+- 定数: `HALO2_IPA_BN254_VK_DIGEST_LEN = 32`（SHA-256）。Rust helper
+  `halo2_ipa::vk_sha256(vk: &[u8]) -> [u8; 32]` は fixture / CI / 配布物の
+  pin 生成に使える（`halo2_ipa_registry::key_digest` / `vk_digest` と同じ値）。
+- digest は VK の parse と `ParamsIPA` 生成より **前** に照合する。不一致は
+  `INVALID_VERIFYING_KEY` (23)。したがって未承認 VK で params 生成コストを
+  強制できない。
+- digest 長が 32 以外（0, 31, 33 など）は `INVALID_LENGTH` (9)、32 バイト長で
+  NULL ポインタは `NULL_INPUT_WITH_DATA` (3)。比較は 32 バイトの
+  早期終了なし比較。すべて `catch_unwind` 内で実行する。
+- `verify_pinned` は digest 一致後に既存の `verify` 経路（VK の構造検証、
+  instance 形状、transcript 全消費）を実行する。`vk_validate_pinned` は
+  digest 一致後に構造検証だけを行う。
+- **unpinned `verify` / `vk_validate` は互換 API であり、呼び出し側の VK を
+  信頼する。** 承認済み artifact の検証には使わない。pin する digest は
+  アプリケーションが独立に配布・固定した承認済み V2 VK のものでなければ
+  ならない（relabel された VK 自身の digest を pin すると当然一致する）。
+
+Nim の type-first API:
+
+```nim
+import rustcrypto/algorithm/halo2_ipa
+
+# 承認済み V2 VK envelope の SHA-256 を独立に固定する（32 bytes）。
+const ApprovedVkSha256: array[Halo2IpaBn254VkDigestLen, byte] = [ ... ]  # 配布物 / ビルド時に pin
+
+# 構造検証 + digest 一致。不一致は RustCryptoErrInvalidVerifyingKey。
+if not Halo2IpaBn254.validateVerifyingKeyPinned(vk, ApprovedVkSha256):
+  raise newException(ValueError, "unapproved VK")
+
+# 承認済み VK に対する証明検証（secure path）。
+if Halo2IpaBn254.verifyPinned(vk, ApprovedVkSha256, proof, instances):
+  echo "valid"
+```
+
+`verifyPinned` は digest 不一致を `RustCryptoErrInvalidVerifyingKey` として
+raise し、構造は正しいが proof が無効な場合だけ `false` を返す。
+`validateVerifyingKeyPinned` は不一致で `false` を返す。digest 長が 32 でない
+場合は Nim 側で `ValueError`（validator は `false`）。
+
+F-1 の負例テスト（`cargo test --lib halo2_ipa`）:
+
+- `pinned_verify_accepts_approved_v2_poseidon2_and_cubic_fixtures`:
+  承認済み V2 Poseidon2 fixture と cubic fixture が自身の digest で
+  `verify_pinned` を通り、別の承認済み digest は拒否される。
+- `pinned_verify_rejects_malformed_digest_arguments`:
+  digest 長 0 / 31 / 33 が `INVALID_LENGTH`、NULL digest / NULL VK が
+  `NULL_INPUT_WITH_DATA`。
+
+残存リスク: アプリケーションが digest pin を省略した場合、または relabel
+された VK の digest を誤って承認済みとして配布した場合は、この防御は働かない。
+pin 値の配布・レビュー・ローテーションはアプリケーションの責任である。
+
 
 ### 検証状況
 
-- Rust unit test（実装担当の報告。本ドキュメント更新では未再実行）:
+- Rust unit test（実測）:
   `cubic_keeps_v1_magic_and_rejects_v2`、
   `poseidon2_uses_v2_magic_and_rejects_v1_relabel`、
   `proof_and_instance_formats_are_revision_independent`、
-  `poseidon2_fixture_is_revision_checked` が revision 束縛と旧 V1 拒否を確認する。
+  `poseidon2_fixture_is_revision_checked`、
+  `legacy_v1_poseidon2_v2_relabel_is_rejected_by_pinning` が revision 束縛と旧 V1 拒否を確認する。
+- F-1 の pin 回帰: `pinned_verify_accepts_approved_v2_poseidon2_and_cubic_fixtures`、
+  `pinned_verify_rejects_malformed_digest_arguments` を追加。unpinned `verify` は
+  呼出側 VK を信頼するため、承認済み digest を渡した `verify_pinned` /
+  `vk_validate_pinned` だけが承認境界になることを確認する。
 - `tests/fixtures/halo2_ipa_poseidon2_v1.hex` と
-  `tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex` は V2 で再生成済み。
-  旧 V1 artifact は `*_legacy_v1.hex` として保持し、
-  `legacy_poseidon2_artifacts_are_rejected` が VK 検証と proof verify の
-  両方で拒否することを確認する。
-- 実測: `cargo test --lib` は 257 passed、Nim の `test_halo2_ipa` と
+  `tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex` は V2。旧 V1 は
+  `*_legacy_v1.hex` として拒否テスト専用に保持し、通常の registry は
+  受理しない。`poseidon2_uses_v2_magic_and_rejects_v1_relabel` と
+  `legacy_v1_poseidon2_v2_relabel_is_rejected_by_pinning` が確認する。
+- 実測: `cargo test --lib` は 259 passed、`cargo test --test
+  halo2_ipa_codec_robustness` は 14 passed、Nim の `test_halo2_ipa` と
   `nimble test` は全件成功、`ci/test_poseidon2_halo2_wasm.sh` は
   native と `wasm32-wasip1` の prove/verify/負例を V2 で実行済み。
   `ci/test_halo2_ipa_wasm.sh` は wasm32-wasip1 と
   wasm32-unknown-unknown の C ABI fixture smoke を実行済み（cubic fixture）。
-- browser Worker と ICP canister の Poseidon2 V2 経路は未再実行である。
+- Browser Worker（`ci/test_halo2_ipa_web.sh`）と ICP canister
+  （`ci/test_ic_branch85.sh`）の Poseidon2 V2 経路も再実行済み。
   cubic（id `1`）の既存 fixture・検証結果は V1 のままで有効。
 
 ## API
@@ -164,7 +256,17 @@ int rustcrypto_halo2_ipa_bn254_verify(
     const uint8_t *proof_ptr, size_t proof_len,
     const uint8_t *instances_ptr, size_t instances_len);
 
+/* Secure path: vk_sha256 is exactly 32 bytes (HALO2_IPA_BN254_VK_DIGEST_LEN) */
+int rustcrypto_halo2_ipa_bn254_verify_pinned(
+    const uint8_t *vk_ptr, size_t vk_len,
+    const uint8_t *vk_sha256_ptr, size_t vk_sha256_len,
+    const uint8_t *proof_ptr, size_t proof_len,
+    const uint8_t *instances_ptr, size_t instances_len);
+
 int rustcrypto_halo2_ipa_bn254_vk_validate(const uint8_t *vk, size_t len);
+int rustcrypto_halo2_ipa_bn254_vk_validate_pinned(
+    const uint8_t *vk, size_t len,
+    const uint8_t *vk_sha256, size_t vk_sha256_len);
 int rustcrypto_halo2_ipa_bn254_pk_validate(const uint8_t *pk, size_t len);
 int rustcrypto_halo2_ipa_bn254_proof_validate(const uint8_t *proof, size_t len);
 int rustcrypto_halo2_ipa_bn254_instances_validate(const uint8_t *instances, size_t len);
@@ -195,6 +297,10 @@ int rustcrypto_halo2_ipa_bn254_instances_validate(const uint8_t *instances, size
   形状（1 値、4 値、または `arity + 1` 値）を検査し、`k` から params を
   再生成（任意でキャッシュ）し、proof transcript を **末尾バイトまで消費**
   したことを確認して `SingleStrategy`（乱数を要求しない単一証明検証）で判定する。
+  **互換 API であり、呼び出し側が渡した VK を信頼する。**
+- `verify_pinned`: `vk_sha256`（32 バイト）と complete VK envelope の SHA-256 を
+  params 生成前に比較し、一致した場合だけ上記 `verify` 経路を実行する。
+  不一致は `INVALID_VERIFYING_KEY`。**承認済み artifact にはこちらを使う。**
 - `*_validate`: 安価な構造検証。VK/PK はレジストリ回路によるデコードまで行う。
   VK/PK の magic は circuit id の revision（cubic = V1、Poseidon2 = V2）と
   一致しなければならない。proof は v1 エンベロープ（magic・長さ・末尾バイト）を、
@@ -227,16 +333,28 @@ let proof4 = Halo2IpaBn254.provePoseidon2Hash(pk4, inputs4, digest4)
 
 if Halo2IpaBn254.verify(vk4, proof4, instances4):
   echo "valid for this profile and key"
+
+# 承認済み artifact の secure path（VK envelope の SHA-256 を独立に pin）
+const ApprovedVkSha256 = [ ... ]  # exactly 32 bytes
+if Halo2IpaBn254.verifyPinned(vk4, ApprovedVkSha256, proof4, instances4):
+  echo "valid against the approved VK"
 ```
 
 `prepare` は `(verifyingKey, provingKey)`、`prove` は `seq[byte]`、
-`verify` は `bool` を返す。`prove` は PK ヘッダの circuit id から
+`verify` / `verifyPinned` は `bool` を返す。`prove` は PK ヘッダの circuit id から
 witness 長を決める（id 1 = 32 バイト、id 2 = 96 バイト、`BASE + n` =
 `32 * n` バイト）。`preparePoseidon2Hash` は `arity` と最小 `k` を検証し、
 `provePoseidon2Hash` は入力の連結を witness、`[digest, inputs...]` を公開入力
 として `prove` に渡す。`poseidon2HashCircuitId` / `poseidon2HashMinK` で
 id と最小 `k` を取得できる。`validateVerifyingKey` / `validateProvingKey` /
 `validateProof` / `validatePublicInstances` も同様に `bool` を返す。
+
+`verify` は互換 API であり caller VK を信頼する。`verifyPinned` /
+`validateVerifyingKeyPinned` は complete VK envelope の SHA-256
+（`Halo2IpaBn254VkDigestLen = 32` バイト）を照合する secure path である。
+digest 不一致は `verifyPinned` では `RustCryptoErrInvalidVerifyingKey` を
+raise し、validator では `false` を返す。digest 長が 32 でない場合は
+Nim 側で `ValueError`（validator は `false`）。
 
 #### prepare / prove の C ABI 二重呼び出しと one-shot キャッシュ
 
@@ -256,8 +374,14 @@ keygen / 証明生成の結果を 2 回目が再利用する。
   params は従来どおり `k` から決定的に再生成され、このキャッシュは
   keygen / 証明生成の重複を避けるためだけのものである。プロセスをまたいで
   永続化しない。
+- `CachedProof` は保持する `witness_bytes` / `instances_bytes` / `pk_bytes` を
+  `Drop` で `zeroize` する。成功時の消費、別 statement による置換、
+  short-output 再試行の保持、thread 終了時の破棄のいずれでも、解放前に
+  ゼロ化される（組み込み C ABI と registry adapter の両方）。証拠となる
+  witness は sizing 呼び出しと本体呼び出しの間だけ thread-local に残る。
 
-公開 API / C ABI シグネチャは変えていない。
+公開 API / C ABI シグネチャは追加のみで、既存シグネチャは変えていない
+（`verify_pinned` / `vk_validate_pinned` を追加）。
 
 ### エラーステータス
 
@@ -273,7 +397,7 @@ keygen / 証明生成の結果を 2 回目が再利用する。
 | `RUSTCRYPTO_ERR_INVALID_PARAMETER` | 15 | 不正な `k` / `circuit_id`、witness と公開入力の不一致 |
 | `RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT` | 20 | 非 canonical な `Fr` |
 | `RUSTCRYPTO_ERR_INVALID_PROOF_FORMAT` | 22 | proof の magic / 長さ / transcript 構造が不正 |
-| `RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY` | 23 | VK の magic / 内部構造 / 内部 `k` が不正 |
+| `RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY` | 23 | VK の magic / 内部構造 / 内部 `k` が不正、または pinned digest 不一致 |
 | `RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT` | 24 | 列数・値数が回路と不一致 |
 | `RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA` | 25 | PK または未知の `circuit_id` が不正 |
 | `RUSTCRYPTO_ERR_PANIC` | -1 | `catch_unwind` が panic を捕捉（FFI 外へは出さない） |
@@ -371,7 +495,9 @@ rustcrypto-ffi = { path = "../../rustcrypto-ffi", features = ["halo2-ipa-verify-
 
 この macro は `verify` / `vk_validate` / `proof_validate` /
 `instances_validate` だけを export し、keygen と prover のシンボルを含めない。
-検証経路は RNG・秘密入力・prover を必要としない。
+組み込み C ABI の `verify_pinned` / `vk_validate_pinned` は verify-only
+ビルドでも export される（prover を含まない）。検証経路は RNG・秘密入力・
+prover を必要としない。
 
 ### wasm consumer
 
@@ -382,8 +508,9 @@ wasm 側で `verify` を呼ぶ consumer は verifier-only macro と
 `halo2-ipa-verify-only` を使い、`prepare` / `prove` を含めない。browser の
 prove を行う場合は prover 入りのビルドと CSPRNG（`OsRng` 相当）が必要で、
 `panic = "abort"` ターゲットでは `catch_unwind` が機能しない点に注意する。
-外部回路の wasm / browser / ICP 実行は **未検証** である（native Rust の
-example test のみ実装担当が報告）。
+外部回路の wasm / Browser Worker / verify-only ICP は検証済みである
+（`examples/halo2-ipa-external-circuit-wasm`、`web/halo2-ipa-external-circuit`、
+`examples/halo2-ipa-external-circuit-ic-verifier`）。
 
 ### pin 必須項目
 
@@ -395,13 +522,25 @@ example test のみ実装担当が報告）。
 | `circuit_version` | `CircuitProfile::circuit_version` | アプリ側の回路改訂の pin |
 | schema | `witness_len` / `instance_column_lengths` | witness 長と公開 instance 形状の一致 |
 | `k` | profile の `min_k..=max_k` から 1 つに固定 | params と VK の再生成条件 |
-| VK digest | `vk_digest(vk)`（SHA-256） | 承認済み VK の pin |
-| params digest | `params_digest(k)` | 透明 IPA params の profile pin |
+| VK digest | `vk_digest(vk)`（SHA-256） | 承認済み VK の pin。`verify` ではなく `verify_pinned` に渡す |
+| params digest | `params_digest(k)` | 透明 IPA params の **profile/version** pin（`k` とドメインの識別子であり、params 内容の digest ではない） |
 | PK digest（任意） | `pk_digest(pk)` | prover 配布物の同一性確認 |
 
 `vk_digest` を固定しない場合、攻撃者が別回路の VK を渡す可能性がある。
 `verify` は VK の構造と `circuit_id` を検査するが、その VK がアプリケーション
-の意図する回路かまでは保証しない。
+の意図する回路か、V2 magic を付けただけの旧 payload かまでは保証しない。
+承認済み artifact では `verify_pinned`（組み込み C ABI）または同等の
+digest 照合を必ず行う。外部 adapter の `verify` も caller VK を信頼する。
+
+`CircuitProfile::max_vk_len` / `max_pk_len` は `prepare` が生成した VK/PK
+envelope にも適用する。keygen 結果が上限を超える場合は、後続の `prove` /
+`verify` で拒否される artifact を配布しないよう `prepare` が
+`INVALID_PARAMETER` を返す。
+
+`params_digest(k)` は `"RCH2IP-PARAMS-V2" || k` の SHA-256 であり、
+`ParamsIPA::new(k)` が生成するパラメータ列の内容 digest ではない。generator
+導出を変更しても値は変わらないため、内容の差し替え検出には使わない
+（既存テストとの互換のため出力は変更しない）。
 
 ### 例とテスト
 
@@ -526,10 +665,9 @@ cargo run --example halo2_ipa_fixture [output.hex]
 `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。digest は
 `23864adb160dddf590f1d3303683ebcb914f828e2635f6e85a32f0a1aecd3dd8`。
 
-> **注意（V2 移行・再生成済み）**: Poseidon2 fixture 2 件は V2 magic で
-> 再生成済みである。旧 V1 は `halo2_ipa_poseidon2_legacy_v1.hex` /
-> `halo2_ipa_poseidon2_arity12_legacy_v1.hex` として保持し、現行実装が
-> `INVALID_VERIFYING_KEY` で拒否することをテストしている。
+> **注意（V2 移行）**: Poseidon2 fixture 2 件は V2 magic である。Poseidon2 は
+> V2 のみをサポートし、V1 fixture/artifact は保持しない。V1-magic の
+> Poseidon2 鍵は `INVALID_VERIFYING_KEY` で拒否する。
 > fixture 名の `_v1` はファイル名であり、artifact revision ではない。
 
 ```text
@@ -539,8 +677,8 @@ cargo run --locked --release --example halo2_ipa_poseidon2_fixture [output.hex]
 第 2 引数に arity（`0..=12`）を渡すと任意 arity 回路（`BASE + arity`）を
 最小 `k` で生成する。arity 12 の committed fixture は
 `tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex`（`circuit_id = 268`、
-`k = 9`、入力 `1..=12`、witness 384 バイト、instance 13 値）。こちらも
-**再生成までは V1 magic のため未使用**である。
+`k = 9`、入力 `1..=12`、witness 384 バイト、instance 13 値）。こちらも V2 で
+ある。
 
 ```text
 cargo run --locked --release --example halo2_ipa_poseidon2_fixture \
@@ -553,8 +691,7 @@ cargo run --locked --release --example halo2_ipa_poseidon2_fixture \
 
 - `prepare` / `prove` / `verify` の k=8 ラウンドトリップ（cubic と Poseidon2）。
 - cubic の committed fixture を C ABI 経由で検証（正常系・繰り返し呼び出し）。
-- Poseidon2 fixture の revision 検査: V1 magic なら VK を拒否し、V2 magic
-  なら検証に成功すること。
+- Poseidon2 fixture の revision 検査: V2 magic で検証に成功すること。
 - revision 束縛: cubic は V1 magic を維持して V2 magic を拒否し、Poseidon2 は
   V2 magic を要求して V1 magic を拒否すること。proof / instances 形式が
   revision に依存しないこと。
@@ -634,12 +771,17 @@ WASM の命令数・cycle・peak memory は未計測。
   seed はテスト専用。
 - VK/PK は呼び出し側が与える信頼入力である。本ライブラリは構造検証と証明
   検証のみを行い、回路がアプリケーションの意図する命題を表すことまでは保証
-  しない。承認済み VK のピン留めはアプリケーションの責任。
-- Poseidon2 の旧 V1-magic 鍵 artifact は受理しない（脆弱な互換経路を残さ
-  ない）。V2 の VK/PK へ再生成し、pin・fixture・canister 設定を更新すること。
+  しない。**構造解析（magic / circuit id / 内部 VK）は認可境界ではない。**
+  承認済み VK の SHA-256 digest を pin し、`verify_pinned` / `verifyPinned`
+  （または同等の照合）を必須とする。unpinned `verify` は caller VK を信頼する。
+- V1 magic の Poseidon2 鍵 artifact は拒否するが、V1 payload に V2 magic を
+  付けた relabel は構造検証を通過する。承認済み V2 digest の pin だけが
+  この relabel を拒否する（F-1、上記
+  [「VK pinning は承認済み artifact の必須条件」](#vk-pinning-は承認済み-artifact-の必須条件f-1)）。
 - 外部回路 adapter は VK の構造・circuit id・schema・`k` を検査するが、
-  circuit の意味的健全性や VK の信頼性は保証しない。`vk_digest` と
-  `params_digest` の pin を必須の運用とする。未監査である。
+  circuit の意味的健全性や VK の信頼性は保証しない。`vk_digest` の pin と
+  digest 照合を必須の運用とする。`prepare` は生成した VK/PK が profile の
+  `max_vk_len` / `max_pk_len` を超えないことも検査する。未監査である。
 - `verify` は VK ヘッダの `k` から `ParamsIPA::new(k)` を再生成する。
   `k <= 16` に制限しているが、`k` が大きいほど CPU/メモリコストが増える。
   optional feature `halo2-ipa-params-cache` を有効にすると、thread-local の
@@ -680,9 +822,8 @@ WASM の命令数・cycle・peak memory は未計測。
   （cubic v1 と Poseidon2 hash）はデモであり、外部 adapter も未監査である。
 - **V2 移行後の統合検証は一部完了**。Poseidon2 fixture は V2 で再生成し、
   Rust native / Nim native / `wasm32-wasip1` の Poseidon2 prove/verify は
-  実行済み。browser Worker と ICP canister の Poseidon2 V2 経路は未再実行。
-  以下の「実装済み」に記録した Poseidon2 の browser / ICP 実測は
-  **旧 V1 回路時点の記録**であり、V2 では未再検証である。
+  実行済み。browser Worker と ICP canister の Poseidon2 V2 経路も
+  再実行済みである。以下に V2 の実測を記録する。
 - **canister 内での proving / keygen は未試行**であり、mainnet deploy・dfx・
   Candid UI も未対応。
 - Poseidon1 の Halo2 custom gate は**比較用に実装済み**
@@ -694,9 +835,15 @@ WASM の命令数・cycle・peak memory は未計測。
 
 - **P0 制約健全性修正と V2 revision**: Poseidon2 sponge の未使用 rate lane と
   capacity 加算値を全 block で zero 制約し、長さ IV と block 間 `prev` コピーも
-  制約する。Poseidon2 の VK/PK は V2 magic、cubic は V1 のまま。旧 V1
-  Poseidon2 artifact は拒否する。詳細は
-  [「回路リビジョンと旧 artifact の移行」](#回路リビジョンと旧-artifact-の移行v1--v2)。
+  制約する。Poseidon2 の VK/PK は V2 magic、cubic は V1 のまま。V1-magic の
+  Poseidon2 envelope は構造検証で拒否する。ただし magic 書換えだけの relabel
+  は構造検証では区別できないため、承認済み VK の SHA-256 pin を必須とする。
+  加えて F-1 対応として、complete VK
+  envelope の SHA-256 を pin する `verify_pinned` / `vk_validate_pinned` /
+  Nim `verifyPinned` / `validateVerifyingKeyPinned` を追加した。詳細は
+  [「回路リビジョンと旧 artifact の移行」](#回路リビジョンと旧-artifact-の移行v1--v2)
+  と
+  [「VK pinning は承認済み artifact の必須条件」](#vk-pinning-は承認済み-artifact-の必須条件f-1)。
 - **再利用可能な `Poseidon2Chip`**: 呼び出し側が割り当て済みの
   `Poseidon2Input`（`Cell` + `Value`）を渡し、copy constraint で sponge /
   permutation に接続する。digest/state のセルを返し、Chip 自身は instance
@@ -706,12 +853,13 @@ WASM の命令数・cycle・peak memory は未計測。
   `CircuitProfile` / `ApprovedCircuit` / 型付き `prepare`・`prove`・`verify`・
   `validate_*` / digest helper と、`halo2_ipa_export_circuit!` /
   `halo2_ipa_export_circuit_verifier!`。17 公開値の複合回路例は
-  `examples/halo2-ipa-external-circuit/`。native Rust test は実装担当が報告
-  （本ドキュメント更新では未実行）。wasm / browser / ICP は未検証。
+  `examples/halo2-ipa-external-circuit/`。native/wasm/Browser Worker と
+  verify-only ICP canister まで検証済み（`docs/halo2-ipa-external-circuit.md`
+  と `docs/halo2-ipa-external-circuit-ic.md`）。
 - **検証専用 feature**: `halo2-ipa-verify-only` で prover/keygen と
   `prepare`/`prove`/`pk_validate` シンボルを除外できる。ICP verifier canister
   はこの feature でビルドし、wasm import が `ic0` の 5 関数のみであることを
-  確認済み（cubic / 旧 V1 Poseidon2 時点）。詳細は
+  確認済み（cubic / Poseidon2 V2 / 外部回路）。詳細は
   [`ic-branch85.md`](ic-branch85.md)。この feature は prover API を削除する
   ため、fixture generator や Nim の `prepare`/`prove` を同時に使うビルドでは
   有効にしない。
@@ -720,21 +868,18 @@ WASM の命令数・cycle・peak memory は未計測。
   単位・upgrade で失われる点は [`ic-branch85.md`](ic-branch85.md) を参照。
 - **Poseidon2 hash3 circuit (id 2)**: 3 入力固定の Poseidon2 sponge を
   `rustcrypto_halo2_ipa_bn254_*` と Nim から利用可能（V2 artifact）。
-  committed fixture `tests/fixtures/halo2_ipa_poseidon2_v1.hex` は V2 で
-  再生成済み。旧 V1 は `halo2_ipa_poseidon2_legacy_v1.hex` として保持し、
-  拒否テストに使う。
-- **ICP canister（旧 V1 時点）**: VK をビルド時に pin した raw update verifier
-  を PocketIC で実行済み。params 再生成を含む cold call の instructions、および
-  cache 済み warm call の instructions は [`ic-branch85.md`](ic-branch85.md) を
-  参照。memory は 53 pages 程度。Poseidon2 canister は V2 VK の再 pin と
-  再実行が必要。
-- **Browser Web Worker prove（旧 V1 時点）**: COOP/COEP なし・
+  committed fixture `tests/fixtures/halo2_ipa_poseidon2_v1.hex` は V2。旧 V1 は
+  `*_legacy_v1.hex` として拒否テストにのみ使用する。
+- **ICP canister（Poseidon2 V2）**: VK をビルド時に pin した raw update verifier
+  を PocketIC で実行済み。Poseidon2 V2 は cold 18,524,357,555 / warm
+  866,284,259 instructions、54 pages。詳細は
+  [`ic-branch85.md`](ic-branch85.md) を参照。
+- **Browser Web Worker prove（Poseidon2 V2）**: COOP/COEP なし・
   `crossOriginIsolated=false` の Chromium で Worker 内 prepare/prove を実行し、
-  Node 側の独立 wasm でも検証。cubic（id 1）に加えて旧 Poseidon2 hash3
-  （id 2）も prove/verify 済み。実測（k=8、cubic v1）: prepare 約
-  1.9–4.1 s、prove 約 2.6–4.9 s、verify 約 1.6–2.2 s、wasm 3,962,513 B
-  （circuit id 2 登録後）、linear memory は prepare 約 3.9 MB / prove・verify
-  約 8.1 MB。`SharedArrayBuffer` は不使用。Poseidon2 の V2 再実行は未実施。
+  Node 側の独立 wasm でも検証。cubic（id 1）と Poseidon2 hash3（id 2, V2）
+  を prove/verify 済み。実測（k=8）: prepare 1.7–2.6 s、prove 2.5–3.4 s、
+  verify 1.6 s、wasm 3,990,735 B。詳細は
+  [`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md) を参照。
 - **ベンチ**: R1CS 形状・native 時間・IPA 1k/20k 相当の合成回路を実測。
   [`benchmarks-branch85.md`](benchmarks-branch85.md)。なお 20k 回路は
   アプリケーション等価ではなく形状ベンチである。

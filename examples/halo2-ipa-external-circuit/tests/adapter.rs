@@ -4,10 +4,12 @@
 //! code a static library consumer or wasm module would call).
 
 use core::ffi::c_int;
+use halo2_axiom::dev::MockProver;
 use halo2_axiom::halo2curves::bn256::Fr;
 use halo2_ipa_external_circuit::{
-    CHAIN_CIRCUIT_ID, INSTANCE_VALUES, LINEAR_CIRCUIT_ID, WITNESS_VALUES, chain_adapter,
-    chain_public_values, linear_adapter, linear_public_values, linear_verifier,
+    CHAIN_CIRCUIT_ID, ChainCircuit, INSTANCE_VALUES, LINEAR_CIRCUIT_ID, LinearCircuit,
+    WITNESS_VALUES, chain_adapter, chain_public_values, linear_adapter, linear_public_values,
+    linear_verifier,
 };
 use rust_crypto_ffi::halo2_ipa::{encode_fr_be, encode_instances_v1};
 use rust_crypto_ffi::halo2_ipa_registry::{params_digest, vk_digest};
@@ -167,6 +169,109 @@ fn chain_statement() -> (Vec<u8>, Vec<u8>) {
         witness_bytes(&inputs),
         instances_bytes(&chain_public_values(&inputs)),
     )
+}
+
+/// `k` used by the mock-prover soundness tests (the profile minimum).
+const MOCK_K: u32 = 6;
+
+/// Builds the public column from an explicit accumulator chain. This lets the
+/// malicious-witness tests publish the chain the prover actually assigned,
+/// isolating the `acc_0 == input_0` binding as the only violated constraint.
+fn public_from_accumulators(
+    inputs: &[Fr; WITNESS_VALUES],
+    accumulators: &[Fr; WITNESS_VALUES],
+) -> Vec<Fr> {
+    let mut public = Vec::with_capacity(INSTANCE_VALUES);
+    public.extend_from_slice(&accumulators[1..WITNESS_VALUES]);
+    public.push(inputs[0]);
+    public.push(inputs[WITNESS_VALUES - 1]);
+    public
+}
+
+fn chain_malicious_accumulators(inputs: &[Fr; WITNESS_VALUES]) -> [Fr; WITNESS_VALUES] {
+    let mut accumulators = [Fr::from(0u64); WITNESS_VALUES];
+    // The old exploit: public input_0 = 1 but start the accumulator at 7.
+    accumulators[0] = Fr::from(7u64);
+    for index in 1..WITNESS_VALUES {
+        accumulators[index] =
+            accumulators[index - 1] * accumulators[index - 1] + inputs[index];
+    }
+    accumulators
+}
+
+fn linear_malicious_accumulators(inputs: &[Fr; WITNESS_VALUES]) -> [Fr; WITNESS_VALUES] {
+    let mut accumulators = [Fr::from(0u64); WITNESS_VALUES];
+    // The old exploit: public input_0 = 1 but start the accumulator at 7.
+    accumulators[0] = Fr::from(7u64);
+    for index in 1..WITNESS_VALUES {
+        accumulators[index] = accumulators[index - 1] + inputs[index];
+    }
+    accumulators
+}
+
+#[test]
+fn honest_witnesses_satisfy_the_constraints() {
+    let inputs = inputs();
+
+    let chain = ChainCircuit::new(&inputs);
+    let chain_prover =
+        MockProver::run(MOCK_K, &chain, vec![chain_public_values(&inputs)]).expect("mock prover");
+    chain_prover.assert_satisfied();
+
+    let linear = LinearCircuit::new(&inputs);
+    let linear_prover = MockProver::run(MOCK_K, &linear, vec![linear_public_values(&inputs)])
+        .expect("mock prover");
+    linear_prover.assert_satisfied();
+}
+
+#[test]
+fn old_malicious_initial_accumulator_is_rejected() {
+    let inputs = inputs();
+
+    let chain_accumulators = chain_malicious_accumulators(&inputs);
+    assert_eq!(inputs[0], Fr::from(1u64));
+    assert_eq!(chain_accumulators[0], Fr::from(7u64));
+    let chain = ChainCircuit::from_witness_parts(&inputs, &chain_accumulators);
+    let chain_instance = public_from_accumulators(&inputs, &chain_accumulators);
+    let chain_prover =
+        MockProver::run(MOCK_K, &chain, vec![chain_instance]).expect("mock prover");
+    assert!(
+        chain_prover.verify().is_err(),
+        "ChainCircuit accepted acc_0 = 7 while publishing input_0 = 1"
+    );
+
+    let linear_accumulators = linear_malicious_accumulators(&inputs);
+    let linear = LinearCircuit::from_witness_parts(&inputs, &linear_accumulators);
+    let linear_instance = public_from_accumulators(&inputs, &linear_accumulators);
+    let linear_prover =
+        MockProver::run(MOCK_K, &linear, vec![linear_instance]).expect("mock prover");
+    assert!(
+        linear_prover.verify().is_err(),
+        "LinearCircuit accepted acc_0 = 7 while publishing input_0 = 1"
+    );
+}
+
+#[test]
+fn changing_only_the_public_input_zero_is_rejected() {
+    let inputs = inputs();
+
+    let mut chain_instance = chain_public_values(&inputs);
+    chain_instance[WITNESS_VALUES - 1] += Fr::from(1u64);
+    let chain_prover = MockProver::run(MOCK_K, &ChainCircuit::new(&inputs), vec![chain_instance])
+        .expect("mock prover");
+    assert!(
+        chain_prover.verify().is_err(),
+        "ChainCircuit accepted a changed public input_0"
+    );
+
+    let mut linear_instance = linear_public_values(&inputs);
+    linear_instance[WITNESS_VALUES - 1] += Fr::from(1u64);
+    let linear_prover = MockProver::run(MOCK_K, &LinearCircuit::new(&inputs), vec![linear_instance])
+        .expect("mock prover");
+    assert!(
+        linear_prover.verify().is_err(),
+        "LinearCircuit accepted a changed public input_0"
+    );
 }
 
 #[test]

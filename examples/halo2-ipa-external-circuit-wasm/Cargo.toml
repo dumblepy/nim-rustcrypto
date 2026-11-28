@@ -1,0 +1,31 @@
+[package]
+name = "halo2-ipa-external-circuit-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "wasm-bindgen adapter for the external Halo2 IPA ChainCircuit example"
+
+[lib]
+name = "halo2_ipa_external_circuit_wasm"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+# Browser/Worker builds run single-threaded without atomics. `panic = "abort"`
+# is the normal wasm profile; the registry still validates all inputs before
+# indexing, so malformed bytes return error statuses instead of trapping.
+panic = "abort"
+opt-level = 3
+lto = true
+
+[patch.crates-io]
+# Same vendored copy as rustcrypto-ffi. The patch removes `multicore` from the
+# default feature list so wasm32-unknown-unknown (without atomics) can build.
+halo2-axiom = { path = "../../rustcrypto-ffi/third_party/halo2-axiom-0.5.3" }
+
+[dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+halo2-ipa-external-circuit = { version = "0.1.0", path = "../halo2-ipa-external-circuit" }
+rustcrypto-ffi = { version = "0.1.6", path = "../../rustcrypto-ffi" }
+wasm-bindgen = "=0.2.129"
+zeroize = "1.8"

@@ -172,7 +172,12 @@ let digest = state[0];                              // 必要なら自前で公�
   入力の全公開、digest の自動公開、host 計算 digest の無制約な受け渡しは
   行わない。
 - `inputs.len()` は `0..=12` で、回路形状として固定する。同一 Chip を同一
-  region で繰り返し呼び出せる（連鎖 hash、複数 hash、public/private 混在）。
+  region 内で繰り返し呼び出せる（連鎖 hash、複数 hash、public/private 混在）。
+  ただし vendored `SimpleFloorPlanner` は `assign_region` ごとに開始 row を
+  0 に固定するため、**複数の `assign_region` に分けて Chip を呼ぶと行が暗黙に
+  重複する**。複数 hash は 1 つの region 内で `base` に明示的な固定 row offset
+  を渡して並べる（出荷済みテストと Merkle 回路の方式）。任意の複数 region
+  配置は未検証であり、呼び出し側が列・行の非重複を保証しなければならない。
 - `without_witnesses` でも同じ layout になるため、keygen に使える。
 - chip の `permutation` は 4 セルを受け取り、最終 state を返す。
 
@@ -223,8 +228,9 @@ witness を作れる。`MockProver` の負例テストは、単に正規 prover 
 
 ## 6. KAT / テスト
 
-`cargo test --locked --lib poseidon2_halo2` の test 群（実装担当の報告。
-本ドキュメント更新では再実行していない）。
+`cargo test --locked --lib poseidon2_halo2` の test 群。内部レビュー環境でも
+22 件 pass を確認している（[`halo2-ipa-security-review.md`](halo2-ipa-security-review.md)
+§4）。本ドキュメント更新では再計測していない。
 
 - permutation zero-state KAT:
   `18dfb8dc...6732e`, `095c230d...f839`, `0bb95458...aa59`,
@@ -252,8 +258,10 @@ witness を作れる。`MockProver` の負例テストは、単に正規 prover 
   `chip_supports_public_and_private_inputs`、
   `chip_digest_cannot_be_substituted`、
   `chip_permutation_matches_the_standalone_result`、
-  `hash_without_witnesses_keygen_succeeds` が秘密入力・連鎖・複数 region・
-  keygen を確認する。`synthesize` が `expect` ではなく
+  `hash_without_witnesses_keygen_succeeds` が秘密入力・単一 region 内での
+  連鎖・keygen を確認する。複数 hash は単一 region 内で明示的な row offset を
+  使う前提であり、**複数 region にまたがる配置はテストしていない**。
+  `synthesize` が `expect` ではなく
   `ok_or(Error::Synthesis)?` を返すことも確認対象である。
 
 代表値（入力 `[1,2,3]`）:
@@ -337,12 +345,21 @@ n=3、k=10 の実測（Ubuntu native、release、1 回の実行。時間は実�
 - **未使用 lane の zero 制約**: 全 block の未使用 rate lane と capacity 加算
   値を 0 に拘束する。負例テストは再計算済みの malicious witness を拒否する。
   この修正で VK/PK が変わったため、Poseidon2 は V2 magic
-  （`RCH2IPV2` / `RCH2IPP2`）を使う。旧 V1 Poseidon2 鍵は拒否される。
+  （`RCH2IPV2` / `RCH2IPP2`）のみをサポートする。旧 V1 Poseidon2 鍵は
+  拒否され、V1 artifact はリポジトリに含めない。
+  ただし **magic は artifact の認可境界ではない**。V2 magic を付けた旧 payload を
+  受理しないためには、承認済み VK digest（SHA-256）の pin が必須である。
 - **fixture RNG**: 例の固定 seed はテスト専用。本番の IPA blinding には
   OS CSPRNG を使う。
-- **wasm**: native と `wasm32-wasip1` で keygen/prove/verify を V2 で実行済み
-  （[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）。browser Worker /
-  ICP canister でのこの回路自体の prove は V2 では未実行。
+- **wasm / browser / ICP**: native と `wasm32-wasip1` で keygen/prove/verify を
+  V2 で実行済み（[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）。
+  browser の Web Worker でも circuit 1（cubic）+ circuit 2（Poseidon2）を V2 で
+  prepare/prove/verify し、`crossOriginIsolated=false` で wrong digest /
+  tampered proof を拒否した実績がある
+  （[`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md)）。
+  ICP は Poseidon2 V2 VK を pin した verify-only canister を PocketIC で
+  実行済み（status 0、cold/warm 命令数を記録）。canister 内での
+  proving / keygen は実装も試行もしていない。
 
 ## 9. 明示的な未達・ギャップ
 
@@ -354,9 +371,10 @@ n=3、k=10 の実測（Ubuntu native、release、1 回の実行。時間は実�
   Nim 側は `Halo2IpaBn254CircuitPoseidon2Hash3V1` と
   `encodePoseidon2HashInstances` を提供する。**artifact は V2**
   （`RCH2IPV2` / `RCH2IPP2`）であり、旧 V1-magic の Poseidon2 VK/PK は受理
-  しない。committed fixture
-  `tests/fixtures/halo2_ipa_poseidon2_v1.hex` は V2 で再生成済みであり、
-  旧 V1 は `halo2_ipa_poseidon2_legacy_v1.hex` として拒否テストに使う。
+  しない。ただし magic の検査だけでは V2 magic を付けた旧 V1 payload を拒否
+  できないため、配備側では VK digest（SHA-256）の pin を必須とする。committed
+  fixture `tests/fixtures/halo2_ipa_poseidon2_v1.hex` は V2 であり、V1 artifact
+  は保持しない。
 - **任意 arity `0..=12` も登録済み**。`HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH_V1_BASE
   = 0x100` に対し `circuit_id = BASE + n`。witness は `32 * n` バイト
   （`n = 0` は 0 バイト、NULL ポインタ可）、公開入力は 1 列 `n + 1` 値
@@ -369,24 +387,31 @@ n=3、k=10 の実測（Ubuntu native、release、1 回の実行。時間は実�
   （`circuit_id = 268`, `k = 9`）は V2 で再生成済みである。
 - **`Poseidon2Chip` は実装済み（未監査）**: 秘密 preimage を既存セルから受け、
   copy constraint で sponge / permutation に接続する。Chip は instance 列を
-  触らず、公開セルは呼び出し側が選ぶ。負例・連鎖・複数 region・keygen の
-  Rust unit test は実装担当が報告。Nim/C ABI への Chip 直接公開は無い
-  （Nim は単体 hash 回路のみ）。
+  触らず、公開セルは呼び出し側が選ぶ。負例・単一 region 内での連鎖・keygen の
+  Rust unit test は実装担当が報告。複数 hash は 1 つの region 内で `base` に
+  明示的な固定 row offset を渡す必要があり、任意の複数 region 配置は未検証
+  （vendored `SimpleFloorPlanner` が全 region を row 0 に置くため）。
+  Nim/C ABI への Chip 直接公開は無い（Nim は単体 hash 回路のみ）。
 - **外部回路の登録はコンパイル時 adapter として実装済み**:
   `halo2_ipa_registry.rs` の `ApprovedCircuit` / `CircuitProfile` と
   `halo2_ipa_export_circuit!` /
   `halo2_ipa_export_circuit_verifier!`。17 公開値の例は
   `examples/halo2-ipa-external-circuit/`。実行時 descriptor・任意コードの
-  ロードは提供しない。wasm / browser / ICP での外部回路実行は未検証。
+  ロードは提供しない。外部回路の wasm / Browser Worker / verify-only ICP は
+  `docs/halo2-ipa-external-circuit.md` と
+  `docs/halo2-ipa-external-circuit-ic.md` で検証済み。
 - **Poseidon1 の Halo2 custom gate は比較用に実装済み**
   （[`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md)）。同一 k=10・同一 IPA
   での rows/VK/PK/proof 比較は [`benchmarks-branch85.md`](benchmarks-branch85.md)
   に記録。width 4・3 入力固定の比較デモであり、C ABI/Nim には未登録。
-- **wasm/ICP 実行（V2）**: Poseidon2 回路自体は V2 で native と
+- **wasm/ICP/browser 実行（V2）**: Poseidon2 回路自体は V2 で native と
   `wasm32-wasip1` の prove/verify を実行済み
-  （`ci/test_poseidon2_halo2_wasm.sh`）。browser Worker / ICP canister は
-  旧 V1 時点の実績のみで、V2 の VK/PK では再実行が必要。任意 arity の
-  canister 側 VK 登録・展開は未検証。
+  （`ci/test_poseidon2_halo2_wasm.sh`）。browser の Web Worker でも circuit 1 +
+  circuit 2 を V2 で prepare/prove/verify 済み
+  （[`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md)）。ICP は
+  Poseidon2 V2 VK を pin した verify-only canister を PocketIC で実行済みで、
+  cold/warm 命令数を記録している。**canister 側の proving / keygen は未実装・
+  未試行**であり、任意 arity の canister 側 VK 登録・展開も未検証。
 - 汎用回路記述子・Noir frontend・実行時の任意 Poseidon2 登録は未実装
   （登録はコンパイル時の型のみ）。
 - Poseidon1 との制約数・WASM instructions/cycles の実測比較は別タスク

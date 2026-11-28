@@ -1,0 +1,57 @@
+[package]
+name = "halo2-ipa-external-circuit-ic-verifier"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Verify-only ICP canister for the external Halo2 IPA ChainCircuit"
+
+[lib]
+name = "halo2_ipa_external_circuit_ic_verifier"
+# The final wasm is linked from this static archive by `link-canister.sh`.
+# Building a `cdylib` directly would make rustc export every `#[no_mangle]`
+# symbol of `rustcrypto-ffi` (including prover entry points), because rustc
+# adds an explicit `--export` for all of them. The archive + explicit wasm-ld
+# export list keeps the module verifier-only.
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# Kept for CLI compatibility with the existing build command. The real
+# effect comes from the dependency features below: the external circuit crate
+# is always linked with `verify-only`, which selects
+# `halo2_ipa_export_circuit_verifier!` and enables
+# `rustcrypto-ffi/halo2-ipa-verify-only` through feature unification.
+halo2-ipa-verify-only = [
+    "halo2-ipa-external-circuit/verify-only",
+    "rustcrypto-ffi/halo2-ipa-verify-only",
+]
+# Reuses one deterministic `ParamsIPA` across verify calls in a canister
+# instance (heap-only, lost on upgrade; not a trusted-SRS cache).
+halo2-ipa-params-cache = ["rustcrypto-ffi/halo2-ipa-params-cache"]
+
+[dependencies]
+# Real Cargo path dependency: no source copy and no `build.rs` source rewrite.
+# `verify-only` makes the example crate export only verifier adapters.
+halo2-ipa-external-circuit = { path = "../halo2-ipa-external-circuit", features = ["verify-only"] }
+# The canister calls the generic registry verifier directly. The feature is
+# also enabled transitively by the external crate; stating it here keeps the
+# canister's intent explicit.
+rustcrypto-ffi = { path = "../../rustcrypto-ffi", features = ["halo2-ipa-verify-only"] }
+# `halo2-axiom` unconditionally names `rand_core::OsRng` in its IPA
+# `AccumulatorStrategy`. The verification path used here (`SingleStrategy`)
+# never instantiates it, so the entropy import is dead-code eliminated. The
+# backend must still compile for wasm32-unknown-unknown: `getrandom`'s
+# `custom` feature lets this crate register a fail-closed stub instead of
+# pulling `wasm-bindgen` / `crypto.getRandomValues` imports into the module.
+getrandom = { version = "0.2", features = ["custom"] }
+
+[patch.crates-io]
+# Use the same vendored halo2-axiom copy as rustcrypto-ffi so the `Circuit`
+# trait and key types are the same crate instance across the dependency graph.
+halo2-axiom = { path = "../../rustcrypto-ffi/third_party/halo2-axiom-0.5.3" }
+
+[profile.release]
+# Optimize for executed instructions (ICP cycle cost) rather than module size.
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = "symbols"

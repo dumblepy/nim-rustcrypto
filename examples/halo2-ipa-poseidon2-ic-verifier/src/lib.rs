@@ -1,11 +1,13 @@
-//! Minimal raw-byte IC update adapter for the Halo2 IPA/BN254 v1 verifier of
+//! Minimal raw-byte IC update adapter for the Halo2 IPA/BN254 verifier of
 //! the registered 3-input Poseidon2 hash circuit (`circuit_id = 2`).
 //!
 //! The approving verifying key is pinned **at build time** through
 //! `HALO2_IPA_APPROVED_VK`; the module exposes no arbitrary VK, witness,
-//! params, or prover entry point. The pinned VK is the one extracted from
-//! `tests/fixtures/halo2_ipa_poseidon2_v1.hex` (k=8); the canister decodes the
-//! circuit id from the VK header, so it verifies id 2 proofs only.
+//! params, or prover entry point. The pinned VK is the V2-magic
+//! (`RCH2IPV2`) key extracted from `tests/fixtures/halo2_ipa_poseidon2_v1.hex`
+//! (k=8; the `_v1` in the filename refers to the proof/instances codec). The
+//! canister decodes the circuit id from the VK header, so it verifies id 2
+//! proofs only, and rejects V1-magic Poseidon2 keys.
 //!
 //! Request: `v1 proof bytes || v1 instances bytes`, where id-2 instances are
 //! `"RCH2IPI1" | 1 column | 4 values` = `[digest, input0, input1, input2]`.

@@ -246,10 +246,9 @@ gadget とネイティブの一致を `cargo test --lib poseidon2` で確認す�
   [`poseidon2-halo2-gate.md`](poseidon2-halo2-gate.md) を参照。3 入力固定の
   `circuit_id=2` と任意 arity `0x100+n`（n=0..=12）が C ABI/Nim に登録済み。
   未使用 absorb lane / capacity 加算値を zero 制約する P0 修正により VK/PK が
-  変わったため、鍵 artifact は **V2**（`RCH2IPV2` / `RCH2IPP2`）である。旧
-  V1-magic の Poseidon2 鍵は拒否され、committed fixture は V2 で再生成済み
-  （旧 V1 は `*_legacy_v1.hex` として拒否テストに保持）。秘密入力を
-  扱う `Poseidon2Chip` も同じ gate を共有する。
+  変わったため、鍵 artifact は **V2**（`RCH2IPV2` / `RCH2IPP2`）のみを
+  サポートする。旧 V1-magic の Poseidon2 鍵は拒否され、V1 fixture は
+  リポジトリに含めない。秘密入力を扱う `Poseidon2Chip` も同じ gate を共有する。
 - Poseidon1 と Poseidon2 の Halo2 rows/proof size 比較は
   [`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md) と
   [`benchmarks-branch85.md`](benchmarks-branch85.md) に記録（同一 k=10・同一 IPA）。

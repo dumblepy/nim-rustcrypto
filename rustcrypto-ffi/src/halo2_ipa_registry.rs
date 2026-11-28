@@ -48,7 +48,11 @@
 //!
 //! The application should pin `profile().circuit_id`, the chosen `k`, and a
 //! digest of the VK. [`key_digest`] / [`vk_digest`] / [`pk_digest`] and
-//! [`params_digest`] are SHA-256 helpers for that purpose.
+//! [`params_digest`] are SHA-256 helpers for that purpose. [`verify`] trusts
+//! its caller-supplied VK; the digest pin must be checked by the application
+//! (or by the built-in pinned C ABI for the built-in circuits) before calling
+//! it, because magic/structural checks cannot reject a legacy payload that was
+//! relabelled with the V2 magic.
 //!
 //! # Wire format
 //!
@@ -112,6 +116,8 @@ use std::rc::Rc;
 use std::any::TypeId;
 #[cfg(not(feature = "halo2-ipa-verify-only"))]
 use std::cell::RefCell;
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+use zeroize::Zeroize;
 
 /// Lowest circuit id reserved for externally registered circuits.
 ///
@@ -405,10 +411,15 @@ fn key_material<C: ApprovedCircuit>(k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int>
     pk.write(&mut pk_bytes, halo2_axiom::SerdeFormat::Processed)
         .map_err(|_| RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA)?;
 
-    Ok((
-        encode_v2_vk(profile.circuit_id, k, &vk_bytes)?,
-        encode_v2_pk(profile.circuit_id, k, &pk_bytes)?,
-    ))
+    let vk_blob = encode_v2_vk(profile.circuit_id, k, &vk_bytes)?;
+    let pk_blob = encode_v2_pk(profile.circuit_id, k, &pk_bytes)?;
+    // `parse_v2_vk` / `parse_v2_pk` reject envelopes above the profile bounds,
+    // so a keygen that exceeds them would produce a key that `prepare` hands
+    // out but `prove` / `verify` refuse. Fail at generation time instead.
+    if vk_blob.len() > profile.max_vk_len || pk_blob.len() > profile.max_pk_len {
+        return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
+    }
+    Ok((vk_blob, pk_blob))
 }
 
 /// Deterministically keygens an approved external circuit for `k`.
@@ -578,10 +589,14 @@ pub fn pk_digest(pk_blob: &[u8]) -> [u8; 32] {
     key_digest(pk_blob)
 }
 
-/// Digest binding the transparent IPA params profile to `k`.
+/// Digest binding the transparent IPA params **profile/version** to `k`.
 ///
 /// The params themselves are derived deterministically from `k` (no trusted
-/// setup), so pinning this digest plus the VK digest pins the whole setup.
+/// setup), so pinning this digest plus the VK digest pins the whole setup
+/// profile. This is **not** a cryptographic digest of the generated
+/// `ParamsIPA` contents: it hashes a domain tag and `k`, so a change to the
+/// generator derivation would not change this value. Rename/replace it only
+/// together with a profile revision; do not treat it as content binding.
 pub fn params_digest(k: u32) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -612,6 +627,17 @@ struct CachedProof {
     witness_bytes: Vec<u8>,
     instances_bytes: Vec<u8>,
     proof: Vec<u8>,
+}
+
+/// Zeroizes the staged witness / instances / PK bytes when the one-shot entry
+/// is consumed, replaced, or dropped.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+impl Drop for CachedProof {
+    fn drop(&mut self) {
+        self.witness_bytes.zeroize();
+        self.instances_bytes.zeroize();
+        self.pk_bytes.zeroize();
+    }
 }
 
 #[cfg(not(feature = "halo2-ipa-verify-only"))]

@@ -8,12 +8,15 @@
 //! Two circuits are registered:
 //!
 //! - [`ChainCircuit`] (id `0x10001`): a 16-step `acc = acc^2 + input` chain with
-//!   a custom gate `q * (acc_prev^2 + input - acc)`. The single instance column
-//!   exposes 17 values `[acc_1, .., acc_15, input_0, input_15]`; the other
-//!   inputs stay in private advice cells.
+//!   a custom gate `q * (acc_prev^2 + input - acc)`. The first accumulator is
+//!   copy-constrained to `input_0`, so the public `input_0` is bound to the
+//!   chain start. The single instance column exposes 17 values
+//!   `[acc_1, .., acc_15, input_0, input_15]`; the other inputs stay in private
+//!   advice cells.
 //! - [`LinearCircuit`] (id `0x10002`): the additive analogue
-//!   `acc = acc + input`, used to show that a proof is bound to its circuit's
-//!   VK and that a verifier-only adapter can be exported separately.
+//!   `acc = acc + input`, with the same `acc_0 == input_0` copy constraint,
+//!   used to show that a proof is bound to its circuit's VK and that a
+//!   verifier-only adapter can be exported separately.
 //!
 //! Both use `Params = ()`, `SimpleFloorPlanner`, a deterministic 16-row layout,
 //! and `without_witnesses()` with the same layout.
@@ -22,6 +25,7 @@ use halo2_axiom::circuit::{Layouter, SimpleFloorPlanner, Value};
 use halo2_axiom::halo2curves::bn256::Fr;
 use halo2_axiom::plonk::{Advice, Assigned, Circuit, Column, ConstraintSystem, Error, Selector};
 use halo2_axiom::poly::Rotation;
+#[cfg(not(feature = "verify-only"))]
 use rust_crypto_ffi::halo2_ipa_export_circuit;
 use rust_crypto_ffi::halo2_ipa_export_circuit_verifier;
 use rust_crypto_ffi::halo2_ipa_registry::{ApprovedCircuit, CircuitProfile, decode_fr_be};
@@ -61,12 +65,16 @@ pub struct ChainConfig {
 #[derive(Clone)]
 pub struct ChainCircuit {
     inputs: Vec<Value<Fr>>,
+    /// Explicit accumulator assignment used only by tests that reproduce the
+    /// old malicious witness. Production construction derives the chain.
+    accumulator_override: Option<Vec<Value<Fr>>>,
 }
 
 impl Default for ChainCircuit {
     fn default() -> Self {
         Self {
             inputs: vec![Value::unknown(); WITNESS_VALUES],
+            accumulator_override: None,
         }
     }
 }
@@ -91,12 +99,37 @@ impl ChainCircuit {
     pub fn new(inputs: &[Fr; WITNESS_VALUES]) -> Self {
         Self {
             inputs: inputs.iter().copied().map(Value::known).collect(),
+            accumulator_override: None,
+        }
+    }
+
+    /// Builds a circuit with an explicitly supplied accumulator chain.
+    ///
+    /// Test support for proving that `acc_0 == input_0` is enforced. The
+    /// values are not validated against the inputs, so this is intentionally
+    /// hidden from the public API; production callers use [`Self::new`].
+    #[doc(hidden)]
+    pub fn from_witness_parts(
+        inputs: &[Fr; WITNESS_VALUES],
+        accumulators: &[Fr; WITNESS_VALUES],
+    ) -> Self {
+        Self {
+            inputs: inputs.iter().copied().map(Value::known).collect(),
+            accumulator_override: Some(
+                accumulators.iter().copied().map(Value::known).collect(),
+            ),
         }
     }
 
     fn accumulators(&self) -> Option<Vec<Value<Fr>>> {
         if self.inputs.len() != WITNESS_VALUES {
             return None;
+        }
+        if let Some(accumulators) = &self.accumulator_override {
+            if accumulators.len() != WITNESS_VALUES {
+                return None;
+            }
+            return Some(accumulators.clone());
         }
         let mut accumulators = Vec::with_capacity(WITNESS_VALUES);
         let mut current = self.inputs[0];
@@ -117,6 +150,7 @@ impl Circuit<Fr> for ChainCircuit {
     fn without_witnesses(&self) -> Self {
         Self {
             inputs: self.inputs.iter().map(|_| Value::unknown()).collect(),
+            accumulator_override: None,
         }
     }
 
@@ -181,6 +215,10 @@ impl Circuit<Fr> for ChainCircuit {
                             .cell(),
                     );
                 }
+                // Bind the first accumulator to `input_0`. Without this the
+                // public `input_0` instance would not be connected to the
+                // chain: a prover could start `acc_0` at any value.
+                region.constrain_equal(input_cells[0], accumulator_cells[0]);
                 Ok((input_cells, accumulator_cells))
             },
         )?;
@@ -220,7 +258,10 @@ impl ApprovedCircuit for ChainCircuit {
         for chunk in bytes.chunks_exact(32) {
             inputs.push(Value::known(decode_fr_be(chunk)?));
         }
-        Ok(Self { inputs })
+        Ok(Self {
+            inputs,
+            accumulator_override: None,
+        })
     }
 }
 
@@ -231,12 +272,16 @@ impl ApprovedCircuit for ChainCircuit {
 #[derive(Clone)]
 pub struct LinearCircuit {
     inputs: Vec<Value<Fr>>,
+    /// Explicit accumulator assignment used only by tests that reproduce the
+    /// old malicious witness. Production construction derives the chain.
+    accumulator_override: Option<Vec<Value<Fr>>>,
 }
 
 impl Default for LinearCircuit {
     fn default() -> Self {
         Self {
             inputs: vec![Value::unknown(); WITNESS_VALUES],
+            accumulator_override: None,
         }
     }
 }
@@ -261,12 +306,37 @@ impl LinearCircuit {
     pub fn new(inputs: &[Fr; WITNESS_VALUES]) -> Self {
         Self {
             inputs: inputs.iter().copied().map(Value::known).collect(),
+            accumulator_override: None,
+        }
+    }
+
+    /// Builds a circuit with an explicitly supplied accumulator chain.
+    ///
+    /// Test support for proving that `acc_0 == input_0` is enforced. The
+    /// values are not validated against the inputs, so this is intentionally
+    /// hidden from the public API; production callers use [`Self::new`].
+    #[doc(hidden)]
+    pub fn from_witness_parts(
+        inputs: &[Fr; WITNESS_VALUES],
+        accumulators: &[Fr; WITNESS_VALUES],
+    ) -> Self {
+        Self {
+            inputs: inputs.iter().copied().map(Value::known).collect(),
+            accumulator_override: Some(
+                accumulators.iter().copied().map(Value::known).collect(),
+            ),
         }
     }
 
     fn accumulators(&self) -> Option<Vec<Value<Fr>>> {
         if self.inputs.len() != WITNESS_VALUES {
             return None;
+        }
+        if let Some(accumulators) = &self.accumulator_override {
+            if accumulators.len() != WITNESS_VALUES {
+                return None;
+            }
+            return Some(accumulators.clone());
         }
         let mut accumulators = Vec::with_capacity(WITNESS_VALUES);
         let mut current = self.inputs[0];
@@ -287,6 +357,7 @@ impl Circuit<Fr> for LinearCircuit {
     fn without_witnesses(&self) -> Self {
         Self {
             inputs: self.inputs.iter().map(|_| Value::unknown()).collect(),
+            accumulator_override: None,
         }
     }
 
@@ -351,6 +422,9 @@ impl Circuit<Fr> for LinearCircuit {
                             .cell(),
                     );
                 }
+                // Bind the first accumulator to `input_0` (same soundness
+                // requirement as `ChainCircuit`).
+                region.constrain_equal(input_cells[0], accumulator_cells[0]);
                 Ok((input_cells, accumulator_cells))
             },
         )?;
@@ -389,13 +463,22 @@ impl ApprovedCircuit for LinearCircuit {
         for chunk in bytes.chunks_exact(32) {
             inputs.push(Value::known(decode_fr_be(chunk)?));
         }
-        Ok(Self { inputs })
+        Ok(Self {
+            inputs,
+            accumulator_override: None,
+        })
     }
 }
 
 // Compile-time registration. No runtime descriptor or code loading.
+#[cfg(not(feature = "verify-only"))]
 halo2_ipa_export_circuit!(ChainCircuit, chain_adapter);
+#[cfg(not(feature = "verify-only"))]
 halo2_ipa_export_circuit!(LinearCircuit, linear_adapter);
+#[cfg(feature = "verify-only")]
+halo2_ipa_export_circuit_verifier!(ChainCircuit, chain_adapter);
+#[cfg(feature = "verify-only")]
+halo2_ipa_export_circuit_verifier!(LinearCircuit, linear_adapter);
 halo2_ipa_export_circuit_verifier!(LinearCircuit, linear_verifier);
 
 /// Sanity check that the profile rows fit the chosen `k` range.
