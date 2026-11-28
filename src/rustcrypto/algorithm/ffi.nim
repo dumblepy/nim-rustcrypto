@@ -139,6 +139,7 @@ const
   Halo2IpaBn254MaxProofLen* = 4 * 1024 * 1024
   Halo2IpaBn254MaxInstanceColumns* = 8
   Halo2IpaBn254MaxInstanceValues* = 4096
+  Halo2IpaBn254VkDigestLen* = 32
   PlonkBn254VkV1Len* = 1148
   PlonkBn254ProofV1MinLen* = 1028
   PlonkBn254MaxPublicInputs* = 4096
@@ -1295,6 +1296,24 @@ proc halo2IpaBn254VerifyRaw*(
     publicInstances: ptr uint8,
     publicInstancesLen: csize_t,
   ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_verify".}
+
+proc halo2IpaBn254VerifyPinnedRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+    verifyingKeySha256: ptr uint8,
+    verifyingKeySha256Len: csize_t,
+    proof: ptr uint8,
+    proofLen: csize_t,
+    publicInstances: ptr uint8,
+    publicInstancesLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_verify_pinned".}
+
+proc halo2IpaBn254VkValidatePinnedRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+    verifyingKeySha256: ptr uint8,
+    verifyingKeySha256Len: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_vk_validate_pinned".}
 
 proc halo2IpaBn254VkValidateRaw*(
     verifyingKey: ptr uint8,

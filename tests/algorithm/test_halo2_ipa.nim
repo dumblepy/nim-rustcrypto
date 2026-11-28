@@ -241,6 +241,34 @@ suite "halo2 ipa bn254 (transparent, no trusted setup)":
       uint32(Poseidon2Vk[11])
     check circuitId == Halo2IpaBn254CircuitPoseidon2Hash3V1
 
+  test "poseidon2 pinned verification binds the approved V2 VK":
+    # SHA-256 of the complete committed V2 Poseidon2 VK envelope.
+    const poseidon2VkSha256Hex =
+      "2dd45d84727cdeae9b23ace1a12bcb8d86d9b1a516b6ee0058867da02e063f7e"
+    var poseidon2VkSha256 = newSeq[byte](Halo2IpaBn254VkDigestLen)
+    for i in 0 ..< poseidon2VkSha256.len:
+      poseidon2VkSha256[i] =
+        byte(parseHexInt(poseidon2VkSha256Hex[2 * i .. 2 * i + 1]))
+
+    check Halo2IpaBn254.validateVerifyingKeyPinned(
+      Poseidon2Vk, poseidon2VkSha256
+    )
+    check Halo2IpaBn254.verifyPinned(
+      Poseidon2Vk, poseidon2VkSha256, Poseidon2Proof, Poseidon2Instances
+    )
+
+    var wrongDigest = poseidon2VkSha256
+    wrongDigest[0] = if wrongDigest[0] == 0: 1'u8 else: 0'u8
+    check not Halo2IpaBn254.validateVerifyingKeyPinned(
+      Poseidon2Vk, wrongDigest
+    )
+    # A pin mismatch is an approval failure, not an invalid proof: the wrapper
+    # raises `RustCryptoErrInvalidVerifyingKey`.
+    expect ValueError:
+      discard Halo2IpaBn254.verifyPinned(
+        Poseidon2Vk, wrongDigest, Poseidon2Proof, Poseidon2Instances
+      )
+
   test "encodePoseidon2HashInstances matches the fixture instances":
     let inputs = poseidon2Inputs()
     let digest = fromHexFr(Poseidon2DigestHex)

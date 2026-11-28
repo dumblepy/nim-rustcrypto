@@ -24,6 +24,7 @@ pub mod groth16_prover_ffi;
 #[doc(hidden)]
 pub mod halo2;
 pub mod halo2_ipa;
+pub mod halo2_ipa_registry;
 mod hash;
 mod hkdf;
 mod hmac;
@@ -32,6 +33,7 @@ mod plonk_bn254;
 mod plonky2;
 mod poseidon;
 pub mod poseidon2;
+pub mod poseidon2_chip;
 pub mod poseidon2_gadget;
 pub mod poseidon2_halo2;
 pub mod poseidon1_halo2;
@@ -147,6 +149,12 @@ pub const HALO2_KZG_BN254_PARAMS_V1_LEN: usize = halo2::HALO2_KZG_BN254_PARAMS_V
 pub const HALO2_KZG_BN254_MAX_PROTOCOL_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROTOCOL_LEN;
 pub const HALO2_KZG_BN254_MAX_PROOF_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROOF_LEN;
 pub const HALO2_IPA_BN254_CIRCUIT_CUBIC_V1: u32 = halo2_ipa::HALO2_IPA_BN254_CIRCUIT_CUBIC_V1;
+pub const HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1: u32 =
+    halo2_ipa::HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1;
+pub const HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH_V1_BASE: u32 =
+    halo2_ipa::HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH_V1_BASE;
+pub const HALO2_IPA_EXTERNAL_CIRCUIT_ID_BASE: u32 =
+    halo2_ipa_registry::HALO2_IPA_EXTERNAL_CIRCUIT_ID_BASE;
 pub const HALO2_IPA_BN254_MIN_K: u32 = halo2_ipa::HALO2_IPA_BN254_MIN_K;
 pub const HALO2_IPA_BN254_MAX_K: u32 = halo2_ipa::HALO2_IPA_BN254_MAX_K;
 pub const HALO2_IPA_BN254_MAX_VK_LEN: usize = halo2_ipa::HALO2_IPA_BN254_MAX_VK_LEN;
@@ -154,3 +162,8 @@ pub const HALO2_IPA_BN254_MAX_PK_LEN: usize = halo2_ipa::HALO2_IPA_BN254_MAX_PK_
 pub const HALO2_IPA_BN254_MAX_PROOF_LEN: usize = halo2_ipa::HALO2_IPA_BN254_MAX_PROOF_LEN;
 pub const HALO2_IPA_BN254_MAX_INSTANCE_COLUMNS: usize = halo2_ipa::HALO2_IPA_BN254_MAX_INSTANCE_COLUMNS;
 pub const HALO2_IPA_BN254_MAX_INSTANCE_VALUES: usize = halo2_ipa::HALO2_IPA_BN254_MAX_INSTANCE_VALUES;
+pub const HALO2_IPA_BN254_VK_DIGEST_LEN: usize = halo2_ipa::HALO2_IPA_BN254_VK_DIGEST_LEN;
+pub const HALO2_IPA_BN254_VK_V1_MAGIC: &[u8; 8] = halo2_ipa::HALO2_IPA_BN254_VK_V1_MAGIC;
+pub const HALO2_IPA_BN254_PK_V1_MAGIC: &[u8; 8] = halo2_ipa::HALO2_IPA_BN254_PK_V1_MAGIC;
+pub const HALO2_IPA_BN254_VK_V2_MAGIC: &[u8; 8] = halo2_ipa::HALO2_IPA_BN254_VK_V2_MAGIC;
+pub const HALO2_IPA_BN254_PK_V2_MAGIC: &[u8; 8] = halo2_ipa::HALO2_IPA_BN254_PK_V2_MAGIC;

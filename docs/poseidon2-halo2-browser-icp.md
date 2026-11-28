@@ -6,6 +6,12 @@ IPA 回路を **ブラウザの Web Worker で prove** し、**ICP canister で 
 `halo2-axiom 0.5.3 (vendored) / BN254 G1 / Fr / IPA(BGH19) / Blake2b` で、
 trusted setup（SRS ceremony）を必要としない。
 
+> **artifact revision**: ブラウザ経路は P0 制約健全性修正後の **Poseidon2 V2**
+> （VK `"RCH2IPV2"` / PK `"RCH2IPP2"`）で再ビルド・再実行済みである。cubic
+> （id `1`）は V1 のまま。ICP canister 側も **Poseidon2 V2 VK を pin して
+> 再ビルドし、PocketIC で再実行済み**である（第 2 節）。cubic canister は
+> id 1 の V1 VK を pin したままである。
+
 - 回路 id `2`: Noir/Barretenberg 互換 Poseidon2 sponge の 3 入力固定回路
 - witness: 3 個の canonical 32-byte big-endian `Fr`（合計 96 bytes）
 - 公開入力: `"RCH2IPI1" | column_count u32 BE (=1) | value_count u32 BE (=4) | digest | input0 | input1 | input2`
@@ -68,16 +74,28 @@ smoke の HTTP サーバは `Cross-Origin-Opener-Policy` /
 single-thread の wasm として動作し、cross-origin isolation を要求しない。
 smoke はこの 2 点を明示的に assert する。
 
-### 1.4 実測（この環境）
+### 1.4 実測（この環境、Poseidon2 V2）
 
 測定環境: Linux x86_64、Node `v24.22.1`、Chromium `158.0.8127.18`、
-`wasm-bindgen 0.2.129`、`wasm32-unknown-unknown` release。
+`wasm-bindgen 0.2.129`、`wasm32-unknown-unknown` release、`rustc 1.99.1`。
 
-| 項目 | circuit 1 (cubic) | circuit 2 (Poseidon2 hash3) |
+再実行コマンド:
+
+```bash
+cd /application
+ZKP_RUST_WASM_TARGETS_INSTALLED=1 \
+  bash ci/test_halo2_ipa_web.sh /tmp/opencode/halo2-ipa-web-final
+```
+
+結果: 終了コード 0、`Halo2 IPA browser Web Worker checks passed`。
+`web/halo2-ipa-prover/pkg` はこのビルドで再生成され、cubic と Poseidon2 V2 の
+両方が同じ wasm アダプタで prepare / prove / verify された。
+
+| 項目 | circuit 1 (cubic) | circuit 2 (Poseidon2 hash3, V2) |
 |---|---:|---:|
-| `prepare` (keygen) | 1,651.7 ms | 3,459.9 ms |
-| `prove`（Worker 内） | 2,382.0 ms | 5,557.5 ms |
-| `verify`（Worker 内） | 1,467.1 ms | 2,037.2 ms |
+| `prepare` (keygen) | 1,708.0 ms | 2,633.6 ms |
+| `prove`（Worker 内） | 2,458.4 ms | 3,360.2 ms |
+| `verify`（Worker 内） | 1,550.9 ms | 1,608.2 ms |
 | VK | 126 bytes | 1,214 bytes |
 | PK | 73,906 bytes | 632,322 bytes |
 | proof | 1,164 bytes | 5,612 bytes |
@@ -85,17 +103,24 @@ smoke はこの 2 点を明示的に assert する。
 | prepare 後 wasm memory | 3,866,624 bytes | 8,126,464 bytes |
 | prove 後 wasm memory | 8,126,464 bytes | 12,386,304 bytes |
 | verify 後 wasm memory | 8,126,464 bytes | 12,386,304 bytes |
-| Node 独立 verify | 2,883.0 ms | 1,783.1 ms |
+| Node 独立 verify | 1,665.8 ms | 1,616.4 ms |
 | wrong instance / digest | `false` | `false` |
 | tampered proof | `false` | `false` |
 | witness zeroized | `true` | `true` |
 
-- 配布する wasm（`pkg/halo2_ipa_prover_bg.wasm`）は **3,967,642 bytes**。
-  cargo の生 wasm は 3,977,670 bytes。
+- Worker 実行: 両回路とも `prepare.inWorker` / `prove.inWorker` /
+  `verify.inWorker` が `true`。`crossOriginIsolated === false`、
+  `SharedArrayBuffer` は未定義（`sharedArrayBufferAvailable === false`）。
+- Poseidon2 の KAT: 入力 `[1, 2, 3]` →
+  `23864adb160dddf590f1d3303683ebcb914f828e2635f6e85a32f0a1aecd3dd8`。
+  smoke は公開 digest がこの値であること、witness が 3 入力であることを
+  assert する。
+- 配布する wasm（`pkg/halo2_ipa_prover_bg.wasm`）は **3,990,735 bytes**。
+  cargo の生 wasm は 3,986,156 bytes。
 - Node の verify 時間は初回の `ParamsIPA::new(8)`（決定的な params 生成）を
   含む。ブラウザ Worker の verify も同じ経路であり、params cache は使わない。
 - 時間はホスト・Chromium・実行ごとのノイズを含む。暗号学的な性能保証ではない。
-- 生データ: `/tmp/halo2-ipa-web-p2/halo2-ipa-web-measurements.json`
+- 生データ: `/tmp/opencode/halo2-ipa-web-v2/halo2-ipa-web-measurements.json`
   （`node web/halo2-ipa-prover/smoke.mjs <artifact-dir>` が出力）。
 
 ---
@@ -115,10 +140,12 @@ smoke はこの 2 点を明示的に assert する。
   canister と同一
 - `const APPROVED_VK: &[u8] = include_bytes!(env!("HALO2_IPA_APPROVED_VK"));`
 
-ビルド時に `tests/fixtures/halo2_ipa_poseidon2_v1.hex` の `VK` を抽出した
-`poseidon2_vk.bin` を `HALO2_IPA_APPROVED_VK` で渡す。canister は VK ヘッダの
-circuit id を decode するため、id 2 の proof だけを検証できる。任意の VK、
-witness、params、prover、RNG を渡すエンドポイントは無い。
+ビルド時に `tests/fixtures/halo2_ipa_poseidon2_v1.hex`（V2 magic で再生成済み）の
+`VK` を抽出した `poseidon2_vk.bin` を `HALO2_IPA_APPROVED_VK` で渡す。canister は
+VK ヘッダの circuit id を decode するため、id 2 の proof だけを検証できる。
+任意の VK、witness、params、prover、RNG を渡すエンドポイントは無い。
+VK の pin はビルド時の `include_bytes!` であり、V2 magic を付けた旧 payload を
+拒否する認可境界として magic だけに依存しない（VK digest の pin が必須）。
 
 ```bash
 cd /application
@@ -151,7 +178,12 @@ reply = i32 status LE || u64 verifier instructions LE || u32 wasm memory pages L
   防御的多重化であり、mock `ic0` で `msg_arg_data_copy` が呼ばれないことを
   確認している。
 
-### 2.3 実測（ローカル PocketIC）
+### 2.3 実測（V2, ローカル PocketIC）
+
+> Poseidon2 の **V2 VK を pin して再ビルドした canister** を PocketIC で
+> 実行した記録である（fixture も V2 で再生成済み）。cubic の V1 実測値とは
+> 混同しないこと。実行コマンドと結果は
+> [`ic-branch85.md`](ic-branch85.md) §2.3 / §4 にも記載している。
 
 測定環境: Node `v24.22.1`、`@dfinity/pic` 0.25.0、`opt-level = 3`、fat LTO、
 `codegen-units = 1`、`strip = "symbols"`。fixture は k=8、proof 5,612 bytes、
@@ -160,11 +192,11 @@ instances 144 bytes、VK 1,214 bytes。
 | 項目 | circuit 2 IPA verify (cold) | circuit 2 IPA verify (warm) |
 |---|---:|---:|
 | status | 0 | 0 |
-| `performance_counter` 差分 (instructions) | 18,523,734,643 | 865,660,902 |
+| `performance_counter` 差分 (instructions) | 18,524,357,555 | 866,284,259 |
 | wasm memory | 54 pages / 3,538,944 bytes | 54 pages / 3,538,944 bytes |
-| PocketIC update cycles（参考） | 18,542,200,989 | — |
-| wasm size | 2,810,841 bytes | 同左 |
-| wasm functions（import + defined） | 5 + 451 = 456 | 同左 |
+| PocketIC update cycles（参考） | 18,542,823,901 | — |
+| wasm size | 2,820,730 bytes | 同左 |
+| wasm functions（import + defined） | 5 + 456 = 461 | 同左 |
 | wasm imports | `ic0` 5 関数のみ | 同左 |
 
 - cold は canister instance での最初の検証。`ParamsIPA::new(8)` の決定的な
@@ -177,18 +209,21 @@ instances 144 bytes、VK 1,214 bytes。
 - 1 回目と 2 回目の差は params 生成の有無による。`updateCyclesDebited` は
   cold 呼び出しの PocketIC update 全体（ingress + 実行）であり、mainnet の
   cycle quote でも検証器単体の tariff でもない。
-- 改変 proof / 改変 instance はともに status `8`。5 MiB 超の引数は mock `ic0`
-  で status `9` かつ `msg_arg_data_copy` 未呼び出し。
+- 改変 proof / 改変 instance はともに status `8`。5 MiB + 1 byte の引数は
+  mock `ic0` で status `9` かつ `msg_arg_data_copy` 未呼び出し。
 - wasm import は `msg_arg_data_size`、`msg_arg_data_copy`、
   `performance_counter`、`msg_reply_data_append`、`msg_reply` の `ic0` 5 関数
   のみ。`__wbindgen` / `getrandom` / Web Crypto の import は無い。
   `__getrandom_custom` は export されるが外部 import ではない。
-- Poseidon2 VK の SHA-256:
-  `c7569f8e59692d914d56f1a9e5f0aab5e786922c1cbfe8d0bc3c4a732854b4ce`。
-  proof の SHA-256:
-  `d6a2956b99163c59b098ad74eaddd3fb6316bbd69d9f212ec66bf9fac12df7c5`。
-- 生データ: `/tmp/ic-branch85-p2/ic-measurements.json`
-  （`bash ci/test_ic_branch85.sh /tmp/ic-branch85-p2` が出力）。
+- Poseidon2 V2 VK の SHA-256:
+  `2dd45d84727cdeae9b23ace1a12bcb8d86d9b1a516b6ee0058867da02e063f7e`。
+  V2 proof の SHA-256:
+  `3db634800dc64ca1218056743cb2c328d012a689405c399622313d791b3c27cf`。
+- canister wasm の SHA-256:
+  `422b6eb8cee279ebb9d65994ca30b847938978a23aae1e175b22a679d8bcbbab`
+  （ツールチェーン / profile 依存）。
+- 生データ: `/tmp/opencode/ic-v2/ic-measurements.json`
+  （`bash ci/test_ic_branch85.sh /tmp/opencode/ic-v2` が出力）。
 
 ### 2.4 回帰確認
 
@@ -196,7 +231,7 @@ instances 144 bytes、VK 1,214 bytes。
 
 1. cubic IPA canister（pin は id 1 VK）: status 0、cold/warm 命令数・ページ数、
    proof/instance 改変の拒否、不正 envelope、5 MiB 超の事前拒否。
-2. Poseidon2 IPA canister（pin は id 2 VK）: status 0、cold/warm 命令数・
+2. Poseidon2 IPA canister（pin は id 2 の V2 VK）: status 0、cold/warm 命令数・
    ページ数、proof/instance 改変の拒否、5 MiB 超の事前拒否。
 3. Poseidon2 hash canister: `[1,2,3]` の KAT、長さ不正・非 canonical・
    13 入力の拒否。
@@ -211,7 +246,10 @@ instances 144 bytes、VK 1,214 bytes。
 - **mainnet の cycles / instructions は未計測**。本ドキュメントの数値はローカル
   PocketIC のものであり、本番の cycle quote ではない。`dfx` による mainnet
   deploy、canister ID、controller 設定、Candid UI も未提供。
-- ブラウザ検証は **headless Chromium** のみ。Firefox / Safari、実機
+- ブラウザ経路は **Poseidon2 V2 で再実行済み**（cubic id 1 + Poseidon2 id 2、
+  k=8、Worker、`crossOriginIsolated=false`、SharedArrayBuffer 不使用）。
+  wrong digest / tampered proof はブラウザ内と Node 独立 wasm の双方で拒否。
+  ただし検証は **headless Chromium** のみで、Firefox / Safari、実機
   スマートフォン、cross-origin isolation ありの構成は未検証。
 - この browser / canister 経路が実行するのは **3 入力固定の circuit id 2**。
   C ABI/Nim には任意 arity `0..=12`（`0x100+n`）も登録済みだが、browser の

@@ -27,6 +27,8 @@ halo2-axiom = { version = "0.5.3", default-features = false, features = ["circui
 # pulling `wasm-bindgen` / `crypto.getRandomValues` imports into the module.
 getrandom = { version = "0.2", features = ["custom"] }
 rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
+sha2 = "0.11.0"
+zeroize = "1.8"
 
 [patch.crates-io]
 halo2-axiom = { path = "../../rustcrypto-ffi/third_party/halo2-axiom-0.5.3" }
