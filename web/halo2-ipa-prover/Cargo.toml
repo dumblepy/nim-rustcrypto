@@ -10,8 +10,13 @@ crate-type = ["cdylib"]
 # Declared so the shared `halo2_ipa.rs` check-cfg stays quiet. This browser
 # adapter always includes the prover, so the feature stays off.
 halo2-ipa-verify-only = []
+# Declared for the same reason; this adapter uses the uncached prover path.
+halo2-ipa-params-cache = []
 
 [dependencies]
+ark-bn254 = "0.5"
+ark-ec = "0.5"
+ark-ff = "0.5"
 halo2-axiom = "0.5.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
 getrandom = { version = "0.2", features = ["js"] }

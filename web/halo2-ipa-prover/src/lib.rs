@@ -19,10 +19,21 @@
 mod status;
 pub use status::*;
 
-// `halo2_ipa` only needs the status codes above plus its own `halo2-axiom`
-// types. The `bn254` / `aead_common` modules are intentionally not included:
-// they are not used by the IPA path and would add unrelated C ABI exports and
-// dependencies to this minimal browser wasm.
+// `halo2_ipa` now registers a Poseidon2 hash circuit (id 2), so its module
+// graph includes the shared Poseidon2 constants/gate. Keep the same source
+// files as the native crate to avoid a second crypto implementation.
+#[path = "../../../rustcrypto-ffi/src/aead_common.rs"]
+#[allow(dead_code)]
+mod aead_common;
+#[path = "../../../rustcrypto-ffi/src/bn254.rs"]
+#[allow(dead_code)]
+mod bn254;
+#[path = "../../../rustcrypto-ffi/src/poseidon2.rs"]
+#[allow(dead_code)]
+mod poseidon2;
+#[path = "../../../rustcrypto-ffi/src/poseidon2_halo2.rs"]
+#[allow(dead_code)]
+mod poseidon2_halo2;
 #[allow(dead_code)]
 #[path = "../../../rustcrypto-ffi/src/halo2_ipa.rs"]
 mod halo2_ipa;

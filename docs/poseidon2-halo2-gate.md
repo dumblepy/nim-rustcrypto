@@ -205,7 +205,8 @@ digest = 23864adb160dddf590f1d3303683ebcb914f828e2635f6e85a32f0a1aecd3dd8
 - IPA `ParamsIPA::<G1Affine>::new(k)`（決定的 hash-to-curve、SRS 不要）
 - BGH19 multi-open、Blake2b transcript
 - 検証は `SingleStrategy`（`AccumulatorStrategy` は `OsRng` を要求するため
-  wasm 非対応。本回路の wasm 実行自体は本タスク範囲外）
+  wasm 非対応）。本回路は `wasm32-wasip1` でも実行済み
+  （[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）
 - 証明用 RNG は fixture 専用の固定 `StdRng` seed（本番は `OsRng`）
 
 実行:
@@ -260,18 +261,32 @@ n=3、k=10 の実測（Ubuntu native、release、1 回の実行。時間は実�
   拘束する。verifier は期待する公開入力を独立に渡すこと。
 - **fixture RNG**: 例の固定 seed はテスト専用。本番の IPA blinding には
   OS CSPRNG を使う。
-- **wasm**: 本回路の wasm/ICP 実行は未実装・未検証。ネイティブのみ。
+- **wasm**: native と `wasm32-wasip1` で keygen/prove/verify を実行済み
+  （[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）。browser Worker /
+  ICP canister でのこの回路自体の prove は未実行。
 
 ## 9. 明示的な未達・ギャップ
 
-- Nim/C ABI の Poseidon2 Halo2 circuit id は未登録。既存
-  `rustcrypto_halo2_ipa_bn254_*` は cubic circuit（id 1）のみを扱う。
-- 本回路の wasm32-unknown-unknown / wasm32-wasip1 / browser / ICP canister
-  実行は未対応（ビルド可否も本タスクでは保証しない）。
-- Poseidon1 の Halo2 custom gate は未実装。
-- 汎用回路記述子・Noir frontend・VK 復元レジストリへの Poseidon2 登録は
+- **Nim/C ABI の Poseidon2 Halo2 circuit id は登録済み**（2026-11 更新）。
+  `rustcrypto_halo2_ipa_bn254_*` の `circuit_id = 2`
+  （`HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1`）として、**3 入力固定**の
+  `Poseidon2HashCircuit` を扱う。witness は 3 個の canonical BE `Fr`
+  （96 バイト）、公開入力は 1 列 `[digest, input0, input1, input2]`、`k >= 7`。
+  Nim 側は `Halo2IpaBn254CircuitPoseidon2Hash3V1` と
+  `encodePoseidon2HashInstances` を提供する。fixture は
+  `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。
+- **arity は 3 固定**。`Poseidon2HashCircuit` 自体は 0..=12 入力を扱えるが、
+  C ABI に登録したのは 3 入力の 1 変種だけである。任意 arity を登録するには
+  回路 id の追加と固定列レイアウトのレビューが必要。
+- **Poseidon1 の Halo2 custom gate は比較用に実装済み**
+  （[`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md)）。同一 k=10・同一 IPA
+  での rows/VK/PK/proof 比較は [`benchmarks-branch85.md`](benchmarks-branch85.md)
+  に記録。width 4・3 入力固定の比較デモであり、C ABI/Nim には未登録。
+- **wasm/ICP 実行**: Poseidon2 回路自体は `wasm32-wasip1` で実行済み。
+  browser Worker / ICP canister での Poseidon2 gate prove、および任意 arity の
+  回路登録は未対応。canister verifier は circuit id 2 の VK/証明を検証できる
+  （`halo2-ipa-params-cache` 併用可）。
+- 汎用回路記述子・Noir frontend・VK 復元レジストリへの任意 Poseidon2 登録は
   未実装。
 - Spartan+WHIR 側の Poseidon2 gadget、Poseidon1 との制約数・WASM
   instructions/cycles の実測比較は別タスク。
-- IPA params / VK / PK の C ABI wire format（magic、長さ上限、circuit id）
-  への統合は未実施。本モジュールは Rust typed API と example のみ。

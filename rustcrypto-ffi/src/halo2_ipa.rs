@@ -16,12 +16,15 @@
 //!
 //! `VerifyingKey::read` / `ProvingKey::read` need a concrete `Circuit` type, so
 //! this module owns a small registry of **approved** circuits keyed by `u32`.
-//! Only [`HALO2_IPA_BN254_CIRCUIT_CUBIC_V1`] (id `1`) is implemented:
 //!
-//! - one advice column, one instance column, one selector;
-//! - gate `x^3 + x + 5 - y == 0`, where `y` is queried from the instance
-//!   column and `x` is the witness;
-//! - public instance: one column with exactly one value `y`.
+//! - [`HALO2_IPA_BN254_CIRCUIT_CUBIC_V1`] (id `1`), `4 <= k <= 16`:
+//!   one advice column, one instance column, one selector; gate
+//!   `x^3 + x + 5 - y == 0`; witness is one canonical 32-byte BE `Fr` `x`;
+//!   public instance is one column with exactly one value `y`.
+//! - [`HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1`] (id `2`), `7 <= k <= 16`:
+//!   the [`Poseidon2HashCircuit`] fixed 3-input Noir/Barretenberg sponge;
+//!   witness is exactly three canonical 32-byte BE `Fr` inputs (96 bytes);
+//!   public instance is one column `[digest, input0, input1, input2]`.
 //!
 //! Adding a circuit requires a Rust source change and review. Arbitrary circuit
 //! code is never loaded from bytes.
@@ -45,7 +48,8 @@
 //! Trailing bytes are rejected. Field elements must be canonical big-endian
 //! BN254 `Fr` values. Lengths are bounded: VK ≤ 4 MiB, PK ≤ 64 MiB, proof
 //! ≤ 4 MiB, at most 8 instance columns and 4096 instance values total, and
-//! `4 <= k <= 16`.
+//! `4 <= k <= 16` (the Poseidon2 circuit additionally requires `k >= 7`, the
+//! 65-row permutation layout's minimum).
 //!
 //! # Security notes
 //!
@@ -56,7 +60,14 @@
 //!   trusted by the application.
 //! - Panics never cross the C ABI: every entry point is wrapped in
 //!   `catch_unwind` and returns [`crate::RUSTCRYPTO_ERR_PANIC`] on failure.
+//! - With the optional `halo2-ipa-params-cache` feature, `ParamsIPA` is cached
+//!   in one thread-local slot per `k`. This is heap memory owned by the current
+//!   canister instance, is lost on upgrade, and is **not** a trusted-SRS cache:
+//!   the params remain deterministically derived from `k` alone.
 
+use crate::poseidon2_halo2::Poseidon2HashCircuit;
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+use crate::poseidon2_halo2::hash_output as poseidon2_hash_output;
 use crate::{
     RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA, RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT,
     RUSTCRYPTO_ERR_INVALID_LENGTH, RUSTCRYPTO_ERR_INVALID_PROOF_FORMAT,
@@ -69,6 +80,8 @@ use crate::{
     RUSTCRYPTO_ERR_INVALID_PARAMETER, RUSTCRYPTO_ERR_NULL_OUTPUT, RUSTCRYPTO_ERR_OUTPUT_TOO_SHORT,
 };
 use core::cell::Cell;
+#[cfg(feature = "halo2-ipa-params-cache")]
+use core::cell::RefCell;
 use core::ffi::c_int;
 use halo2_axiom::SerdeFormat;
 use halo2_axiom::circuit::{Layouter, SimpleFloorPlanner, Value};
@@ -105,7 +118,18 @@ pub const HALO2_IPA_BN254_INSTANCES_V1_MAGIC: &[u8; 8] = b"RCH2IPI1";
 /// Built-in approved circuit: public `y = x^3 + x + 5`, witness `x`.
 pub const HALO2_IPA_BN254_CIRCUIT_CUBIC_V1: u32 = 1;
 
+/// Built-in approved circuit: 3-input Poseidon2 hash.
+///
+/// Witness: three canonical 32-byte BE `Fr` inputs (96 bytes). Public
+/// instance: one column `[digest, input0, input1, input2]`.
+pub const HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1: u32 = 2;
+
+/// Number of Poseidon2 hash inputs fixed by circuit id `2`.
+pub const HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS: usize = 3;
+
 pub const HALO2_IPA_BN254_MIN_K: u32 = 4;
+/// The Poseidon2 circuit uses 65 rows per permutation, so `k >= 7`.
+pub const HALO2_IPA_BN254_POSEIDON2_HASH3_MIN_K: u32 = 7;
 pub const HALO2_IPA_BN254_MAX_K: u32 = 16;
 pub const HALO2_IPA_BN254_MAX_VK_LEN: usize = 4 * 1024 * 1024;
 pub const HALO2_IPA_BN254_MAX_PK_LEN: usize = 64 * 1024 * 1024;
@@ -187,18 +211,27 @@ impl Circuit<Fr> for CubicCircuitV1 {
 }
 
 fn valid_circuit_id(circuit_id: u32) -> bool {
-    circuit_id == HALO2_IPA_BN254_CIRCUIT_CUBIC_V1
+    matches!(
+        circuit_id,
+        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 | HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1
+    )
 }
 
+/// Envelope-wide `k` bound. Per-circuit bounds are enforced by
+/// [`valid_k_for_circuit`].
 fn valid_k(k: u32) -> bool {
     (HALO2_IPA_BN254_MIN_K..=HALO2_IPA_BN254_MAX_K).contains(&k)
 }
 
-#[cfg(not(feature = "halo2-ipa-verify-only"))]
-fn circuit_without_witnesses(circuit_id: u32) -> Result<CubicCircuitV1, c_int> {
+/// Registered circuits have different row counts and therefore different
+/// minimum `k`.
+fn valid_k_for_circuit(circuit_id: u32, k: u32) -> bool {
     match circuit_id {
-        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => Ok(CubicCircuitV1::default()),
-        _ => Err(RUSTCRYPTO_ERR_INVALID_PARAMETER),
+        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => valid_k(k),
+        HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 => {
+            (HALO2_IPA_BN254_POSEIDON2_HASH3_MIN_K..=HALO2_IPA_BN254_MAX_K).contains(&k)
+        }
+        _ => false,
     }
 }
 
@@ -215,6 +248,21 @@ fn fr_from_be(bytes: &[u8]) -> Result<Fr, c_int> {
         le[FR_BYTES - 1 - index] = *byte;
     }
     Option::<Fr>::from(Fr::from_repr(le)).ok_or(RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT)
+}
+
+/// Parses the circuit id `2` witness: exactly three canonical BE `Fr` values.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+fn poseidon2_inputs_from_be(
+    bytes: &[u8],
+) -> Result<[Fr; HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS], c_int> {
+    if bytes.len() != HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS * FR_BYTES {
+        return Err(RUSTCRYPTO_ERR_INVALID_LENGTH);
+    }
+    let mut inputs = [Fr::from(0u64); HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS];
+    for (index, chunk) in bytes.chunks_exact(FR_BYTES).enumerate() {
+        inputs[index] = fr_from_be(chunk)?;
+    }
+    Ok(inputs)
 }
 
 /// Encodes a canonical big-endian `Fr` the same way the wire format does.
@@ -387,7 +435,8 @@ where
     Ok(result)
 }
 
-fn parse_vk(bytes: &[u8]) -> Result<(u32, VerifyingKey<G1Affine>), c_int> {
+/// Parses a v1 VK envelope and returns `(circuit_id, k, vk)`.
+fn parse_vk(bytes: &[u8]) -> Result<(u32, u32, VerifyingKey<G1Affine>), c_int> {
     if bytes.len() < VK_HEADER_LEN {
         return Err(RUSTCRYPTO_ERR_INVALID_LENGTH);
     }
@@ -403,7 +452,7 @@ fn parse_vk(bytes: &[u8]) -> Result<(u32, VerifyingKey<G1Affine>), c_int> {
     if !valid_circuit_id(circuit_id) {
         return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
     }
-    if !valid_k(k) {
+    if !valid_k_for_circuit(circuit_id, k) {
         return Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY);
     }
     let payload = &bytes[VK_HEADER_LEN..];
@@ -413,9 +462,13 @@ fn parse_vk(bytes: &[u8]) -> Result<(u32, VerifyingKey<G1Affine>), c_int> {
             read_vk_payload::<CubicCircuitV1>(payload, RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY)
         }))
         .unwrap_or(Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY))?,
+        HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 => catch_unwind(AssertUnwindSafe(|| {
+            read_vk_payload::<Poseidon2HashCircuit>(payload, RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY)
+        }))
+        .unwrap_or(Err(RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY))?,
         _ => return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA),
     };
-    Ok((k, vk))
+    Ok((circuit_id, k, vk))
 }
 
 /// Walks the canonical `ProvingKey` serialization *without* allocating, so a
@@ -497,8 +550,46 @@ fn validate_pk_layout(bytes: &[u8], vk_end: usize, k: u32) -> Result<(), c_int> 
     Ok(())
 }
 
+/// Reads one `ProvingKey` after validating the non-allocating layout scan.
 #[cfg(not(feature = "halo2-ipa-verify-only"))]
-fn parse_pk(bytes: &[u8]) -> Result<(u32, ProvingKey<G1Affine>), c_int> {
+fn parse_pk_with_circuit<C>(payload: &[u8], k: u32) -> Result<ProvingKey<G1Affine>, c_int>
+where
+    C: Circuit<Fr, Params = ()>,
+{
+    const VK_READ_ERROR: c_int = RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA;
+    check_serialized_vk_prefix(payload, k, VK_READ_ERROR)?;
+
+    // The PK starts with the serialized VK. Use a counting cursor to learn its
+    // exact extent, then walk the remaining polynomial layout without
+    // allocating.
+    let mut cursor = Cursor::new(payload);
+    let vk_end = match catch_unwind(AssertUnwindSafe(|| {
+        VerifyingKey::<G1Affine>::read::<_, C>(&mut cursor, SerdeFormat::Processed, ())
+    })) {
+        Ok(Ok(_)) => cursor.position() as usize,
+        _ => return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA),
+    };
+    if vk_end == 0 || vk_end > payload.len() {
+        return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
+    }
+    validate_pk_layout(payload, vk_end, k)?;
+
+    let mut cursor = Cursor::new(payload);
+    let pk = match catch_unwind(AssertUnwindSafe(|| {
+        ProvingKey::<G1Affine>::read::<_, C>(&mut cursor, SerdeFormat::Processed, ())
+    })) {
+        Ok(Ok(pk)) => pk,
+        _ => return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA),
+    };
+    if cursor.position() as usize != payload.len() {
+        return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
+    }
+    Ok(pk)
+}
+
+/// Parses a v1 PK envelope and returns `(circuit_id, k, pk)`.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+fn parse_pk(bytes: &[u8]) -> Result<(u32, u32, ProvingKey<G1Affine>), c_int> {
     if bytes.len() < PK_HEADER_LEN {
         return Err(RUSTCRYPTO_ERR_INVALID_LENGTH);
     }
@@ -514,39 +605,19 @@ fn parse_pk(bytes: &[u8]) -> Result<(u32, ProvingKey<G1Affine>), c_int> {
     if !valid_circuit_id(circuit_id) {
         return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
     }
-    if !valid_k(k) {
+    if !valid_k_for_circuit(circuit_id, k) {
         return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
     }
     let payload = &bytes[PK_HEADER_LEN..];
 
-    // The PK starts with the serialized VK. Use a counting cursor to learn its
-    // exact extent, then walk the remaining polynomial layout without
-    // allocating.
-    const VK_READ_ERROR: c_int = RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA;
-    check_serialized_vk_prefix(payload, k, VK_READ_ERROR)?;
-    let mut cursor = Cursor::new(payload);
-    let vk_end = match catch_unwind(AssertUnwindSafe(|| {
-        VerifyingKey::<G1Affine>::read::<_, CubicCircuitV1>(&mut cursor, SerdeFormat::Processed, ())
-    })) {
-        Ok(Ok(_)) => cursor.position() as usize,
+    let pk = match circuit_id {
+        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => parse_pk_with_circuit::<CubicCircuitV1>(payload, k)?,
+        HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 => {
+            parse_pk_with_circuit::<Poseidon2HashCircuit>(payload, k)?
+        }
         _ => return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA),
     };
-    if vk_end == 0 || vk_end > payload.len() {
-        return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
-    }
-    validate_pk_layout(payload, vk_end, k)?;
-
-    let mut cursor = Cursor::new(payload);
-    let pk = match catch_unwind(AssertUnwindSafe(|| {
-        ProvingKey::<G1Affine>::read::<_, CubicCircuitV1>(&mut cursor, SerdeFormat::Processed, ())
-    })) {
-        Ok(Ok(pk)) => pk,
-        _ => return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA),
-    };
-    if cursor.position() as usize != payload.len() {
-        return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
-    }
-    Ok((k, pk))
+    Ok((circuit_id, k, pk))
 }
 
 fn parse_proof(bytes: &[u8]) -> Result<&[u8], c_int> {
@@ -616,33 +687,72 @@ fn parse_instances(bytes: &[u8]) -> Result<Vec<Vec<Fr>>, c_int> {
     Ok(columns)
 }
 
-/// The registered cubic circuit takes exactly one public instance column with
-/// exactly one value.
-fn parse_single_instance(bytes: &[u8]) -> Result<Fr, c_int> {
+/// Parses the instances blob and enforces the registered shape of
+/// `circuit_id`, returning its single instance column.
+///
+/// - cubic (id `1`): one column, one value.
+/// - Poseidon2 hash3 (id `2`): one column, four values
+///   `[digest, input0, input1, input2]`.
+fn parse_instances_for(circuit_id: u32, bytes: &[u8]) -> Result<Vec<Fr>, c_int> {
+    let expected_values = match circuit_id {
+        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => 1,
+        HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 => HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS + 1,
+        _ => return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA),
+    };
     let mut columns = parse_instances(bytes)?;
-    if columns.len() != 1 || columns[0].len() != 1 {
+    if columns.len() != 1 || columns[0].len() != expected_values {
         return Err(RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT);
     }
     columns
         .pop()
-        .and_then(|mut column| column.pop())
         .ok_or(RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT)
 }
 
 // ---------------------------------------------------------------------------
-// Key generation / proving helpers
+// Deterministic params (optionally cached)
 // ---------------------------------------------------------------------------
 
-#[cfg(not(feature = "halo2-ipa-verify-only"))]
-fn key_material(circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int> {
-    if !valid_circuit_id(circuit_id) || !valid_k(k) {
-        return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
+/// Returns the deterministic IPA params for `k`.
+///
+/// Without the `halo2-ipa-params-cache` feature this regenerates the generator
+/// set from `k` on every call. With the feature, a single-entry thread-local
+/// cache holds one `(k, params)` pair; a hit clones it. The cache is ordinary
+/// heap memory owned by the current canister instance, is lost on upgrade, and
+/// is **not** a trusted-SRS cache: the params are still derived from `k` alone.
+#[cfg(not(feature = "halo2-ipa-params-cache"))]
+fn params_for(k: u32) -> ParamsIPA<G1Affine> {
+    ParamsIPA::<G1Affine>::new(k)
+}
+
+#[cfg(feature = "halo2-ipa-params-cache")]
+fn params_for(k: u32) -> ParamsIPA<G1Affine> {
+    std::thread_local! {
+        static PARAMS_CACHE: RefCell<Option<(u32, ParamsIPA<G1Affine>)>> =
+            const { RefCell::new(None) };
     }
-    let params = ParamsIPA::<G1Affine>::new(k);
-    let circuit = circuit_without_witnesses(circuit_id)?;
-    let vk = keygen_vk(&params, &circuit).map_err(|_| RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA)?;
-    let pk = keygen_pk(&params, vk.clone(), &circuit)
-        .map_err(|_| RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA)?;
+    PARAMS_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((cached_k, params)) = cache.as_ref() {
+            if *cached_k == k {
+                return params.clone();
+            }
+        }
+        let params = ParamsIPA::<G1Affine>::new(k);
+        *cache = Some((k, params.clone()));
+        params
+    })
+}
+
+/// Builds a v1 VK/PK blob pair for an approved circuit.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+fn keygen_blobs<C>(circuit: &C, circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int>
+where
+    C: Circuit<Fr, Params = ()>,
+{
+    let params = params_for(k);
+    let vk = keygen_vk(&params, circuit).map_err(|_| RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA)?;
+    let pk =
+        keygen_pk(&params, vk.clone(), circuit).map_err(|_| RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA)?;
 
     let mut vk_bytes = Vec::new();
     vk.write(&mut vk_bytes, SerdeFormat::Processed)
@@ -657,6 +767,25 @@ fn key_material(circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int> {
     ))
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+fn key_material(circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int> {
+    if !valid_circuit_id(circuit_id) || !valid_k_for_circuit(circuit_id, k) {
+        return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
+    }
+    match circuit_id {
+        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => keygen_blobs(&CubicCircuitV1::default(), circuit_id, k),
+        HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 => {
+            // The fixed columns depend on the sponge layout, so keygen with the
+            // registered 3-input arity instead of `Default` (0 inputs).
+            let circuit = Poseidon2HashCircuit::new(
+                &[Fr::from(0u64); HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS],
+            );
+            keygen_blobs(&circuit, circuit_id, k)
+        }
+        _ => Err(RUSTCRYPTO_ERR_INVALID_PARAMETER),
+    }
+}
+
 /// Generates v1 VK/PK blobs for an approved circuit. Fixture/test support.
 #[cfg(not(feature = "halo2-ipa-verify-only"))]
 #[doc(hidden)]
@@ -664,9 +793,70 @@ pub fn generate_key_material_v1(circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec
     key_material(circuit_id, k)
 }
 
+/// Generates v1 VK/PK blobs for the registered 3-input Poseidon2 hash circuit.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+#[doc(hidden)]
+pub fn generate_poseidon2_key_material_v1(k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int> {
+    key_material(HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1, k)
+}
+
 #[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn expected_instance(x: Fr) -> Fr {
     x * x * x + x + Fr::from(5u64)
+}
+
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+fn prove_circuit_with_pk<R: RngCore, C: Circuit<Fr>>(
+    k: u32,
+    pk: &ProvingKey<G1Affine>,
+    circuit: C,
+    instance_values: &[Fr],
+    rng: R,
+) -> Result<Vec<u8>, c_int> {
+    let params = params_for(k);
+    let instance_columns: [&[Fr]; 1] = [instance_values];
+    let instances: [&[&[Fr]]; 1] = [&instance_columns];
+
+    let mut transcript =
+        Blake2bWrite::<Vec<u8>, G1Affine, Challenge255<G1Affine>>::init(Vec::new());
+    create_proof::<IPACommitmentScheme<G1Affine>, ProverIPA<_>, _, _, _, _>(
+        &params,
+        pk,
+        &[circuit],
+        &instances,
+        rng,
+        &mut transcript,
+    )
+    .map_err(|_| RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA)?;
+    let transcript_bytes = transcript.finalize();
+    encode_proof_v1(&transcript_bytes)
+}
+
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+fn prove_cubic_with_pk<R: RngCore>(
+    k: u32,
+    pk: &ProvingKey<G1Affine>,
+    witness: Fr,
+    instance: Fr,
+    rng: R,
+) -> Result<Vec<u8>, c_int> {
+    let circuit = CubicCircuitV1 {
+        x: Value::known(witness),
+    };
+    prove_circuit_with_pk(k, pk, circuit, &[instance], rng)
+}
+
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+fn prove_poseidon2_with_pk<R: RngCore>(
+    k: u32,
+    pk: &ProvingKey<G1Affine>,
+    inputs: [Fr; HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS],
+    digest: Fr,
+    rng: R,
+) -> Result<Vec<u8>, c_int> {
+    let circuit = Poseidon2HashCircuit::new(&inputs);
+    let instances = [digest, inputs[0], inputs[1], inputs[2]];
+    prove_circuit_with_pk(k, pk, circuit, &instances, rng)
 }
 
 #[cfg(not(feature = "halo2-ipa-verify-only"))]
@@ -676,33 +866,14 @@ fn prove_with_rng_impl<R: RngCore>(
     instance: Fr,
     rng: R,
 ) -> Result<Vec<u8>, c_int> {
-    let (k, pk) = parse_pk(pk_blob)?;
+    let (circuit_id, k, pk) = parse_pk(pk_blob)?;
+    if circuit_id != HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 {
+        return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
+    }
     if expected_instance(witness) != instance {
         return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
     }
-
-    let params = ParamsIPA::<G1Affine>::new(k);
-    let circuit = CubicCircuitV1 {
-        x: Value::known(witness),
-    };
-
-    let instance_values = [instance];
-    let instance_columns: [&[Fr]; 1] = [&instance_values];
-    let instances: [&[&[Fr]]; 1] = [&instance_columns];
-
-    let mut transcript =
-        Blake2bWrite::<Vec<u8>, G1Affine, Challenge255<G1Affine>>::init(Vec::new());
-    create_proof::<IPACommitmentScheme<G1Affine>, ProverIPA<_>, _, _, _, _>(
-        &params,
-        &pk,
-        &[circuit],
-        &instances,
-        rng,
-        &mut transcript,
-    )
-    .map_err(|_| RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA)?;
-    let transcript_bytes = transcript.finalize();
-    encode_proof_v1(&transcript_bytes)
+    prove_cubic_with_pk(k, &pk, witness, instance, rng)
 }
 
 /// Proves the registered cubic circuit with a caller-supplied RNG. Used by the
@@ -716,6 +887,26 @@ pub fn prove_with_rng_v1<R: RngCore>(
     rng: R,
 ) -> Result<Vec<u8>, c_int> {
     prove_with_rng_impl(pk_blob, witness, instance, rng)
+}
+
+/// Proves the registered 3-input Poseidon2 hash circuit with a caller-supplied
+/// RNG. Used by the deterministic fixture generator; the C ABI uses `OsRng`.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+#[doc(hidden)]
+pub fn prove_poseidon2_with_rng_v1<R: RngCore>(
+    pk_blob: &[u8],
+    inputs: [Fr; HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS],
+    digest: Fr,
+    rng: R,
+) -> Result<Vec<u8>, c_int> {
+    let (circuit_id, k, pk) = parse_pk(pk_blob)?;
+    if circuit_id != HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 {
+        return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
+    }
+    if poseidon2_hash_output(&inputs) != digest {
+        return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
+    }
+    prove_poseidon2_with_pk(k, &pk, inputs, digest, rng)
 }
 
 // ---------------------------------------------------------------------------
@@ -754,7 +945,7 @@ fn prepare_impl(
     pk_cap: usize,
     pk_len: *mut usize,
 ) -> c_int {
-    if !valid_circuit_id(circuit_id) || !valid_k(k) {
+    if !valid_circuit_id(circuit_id) || !valid_k_for_circuit(circuit_id, k) {
         return RUSTCRYPTO_ERR_INVALID_PARAMETER;
     }
     if vk_len.is_null() || pk_len.is_null() {
@@ -805,22 +996,30 @@ fn prove_impl(
         Ok(bytes) => bytes,
         Err(error) => return error,
     };
+    // The circuit id comes from the PK header and selects the witness length.
+    let (circuit_id, k, pk) = match parse_pk(pk_bytes) {
+        Ok(parsed) => parsed,
+        Err(error) => return error,
+    };
+    let witness_expected = match circuit_id {
+        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => FR_BYTES,
+        HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 => {
+            HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS * FR_BYTES
+        }
+        _ => return RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA,
+    };
     let witness_bytes = match read_input(
         witness_ptr,
         witness_len,
-        FR_BYTES,
+        witness_expected,
         RUSTCRYPTO_ERR_INVALID_LENGTH,
     ) {
         Ok(bytes) => bytes,
         Err(error) => return error,
     };
-    if witness_bytes.len() != FR_BYTES {
+    if witness_bytes.len() != witness_expected {
         return RUSTCRYPTO_ERR_INVALID_LENGTH;
     }
-    let witness = match fr_from_be(witness_bytes) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
     let instances_bytes = match read_input(
         instances_ptr,
         instances_len,
@@ -830,15 +1029,43 @@ fn prove_impl(
         Ok(bytes) => bytes,
         Err(error) => return error,
     };
-    let instance = match parse_single_instance(instances_bytes) {
-        Ok(value) => value,
+    let instance_column = match parse_instances_for(circuit_id, instances_bytes) {
+        Ok(column) => column,
         Err(error) => return error,
     };
-    if expected_instance(witness) != instance {
-        return RUSTCRYPTO_ERR_INVALID_PARAMETER;
-    }
 
-    let proof = match prove_with_rng_impl(pk_bytes, witness, instance, OsRng) {
+    // Check the public relation before proving so a mismatched statement never
+    // yields a knowingly invalid proof.
+    let proof = match circuit_id {
+        HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => {
+            let witness = match fr_from_be(witness_bytes) {
+                Ok(value) => value,
+                Err(error) => return error,
+            };
+            let instance = instance_column[0];
+            if expected_instance(witness) != instance {
+                return RUSTCRYPTO_ERR_INVALID_PARAMETER;
+            }
+            prove_cubic_with_pk(k, &pk, witness, instance, OsRng)
+        }
+        HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1 => {
+            let inputs = match poseidon2_inputs_from_be(witness_bytes) {
+                Ok(value) => value,
+                Err(error) => return error,
+            };
+            let digest = instance_column[0];
+            if instance_column[1] != inputs[0]
+                || instance_column[2] != inputs[1]
+                || instance_column[3] != inputs[2]
+                || digest != poseidon2_hash_output(&inputs)
+            {
+                return RUSTCRYPTO_ERR_INVALID_PARAMETER;
+            }
+            prove_poseidon2_with_pk(k, &pk, inputs, digest, OsRng)
+        }
+        _ => return RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA,
+    };
+    let proof = match proof {
         Ok(proof) => proof,
         Err(error) => return error,
     };
@@ -897,12 +1124,12 @@ fn verify_impl(
         Err(error) => return error,
     };
 
-    let (k, vk) = match parse_vk(vk_bytes) {
+    let (circuit_id, k, vk) = match parse_vk(vk_bytes) {
         Ok(vk) => vk,
         Err(error) => return error,
     };
-    let instance = match parse_single_instance(instances_bytes) {
-        Ok(value) => value,
+    let instance_column = match parse_instances_for(circuit_id, instances_bytes) {
+        Ok(column) => column,
         Err(error) => return error,
     };
     let transcript_bytes = match parse_proof(proof_bytes) {
@@ -910,7 +1137,7 @@ fn verify_impl(
         Err(error) => return error,
     };
 
-    let params = ParamsIPA::<G1Affine>::new(k);
+    let params = params_for(k);
     let verifier_params = params.verifier_params();
 
     let position = Rc::new(Cell::new(0usize));
@@ -920,8 +1147,7 @@ fn verify_impl(
     };
     let mut transcript = Blake2bRead::<_, G1Affine, Challenge255<G1Affine>>::init(reader);
 
-    let instance_values = [instance];
-    let instance_columns: [&[Fr]; 1] = [&instance_values];
+    let instance_columns: [&[Fr]; 1] = [&instance_column];
     let instances: [&[&[Fr]]; 1] = [&instance_columns];
 
     match verify_proof::<IPACommitmentScheme<G1Affine>, VerifierIPA<_>, _, _, SingleStrategy<_>>(
@@ -990,6 +1216,9 @@ fn validate_proof_impl(proof_ptr: *const u8, proof_len: usize) -> c_int {
     }
 }
 
+/// Validates the instances envelope and accepts either registered shape:
+/// one column with one value (cubic) or one column with four values
+/// (Poseidon2 hash3).
 fn validate_instances_impl(instances_ptr: *const u8, instances_len: usize) -> c_int {
     let bytes = match read_input(
         instances_ptr,
@@ -1000,10 +1229,16 @@ fn validate_instances_impl(instances_ptr: *const u8, instances_len: usize) -> c_
         Ok(bytes) => bytes,
         Err(error) => return error,
     };
-    match parse_instances(bytes) {
-        Ok(_) => RUSTCRYPTO_OK,
-        Err(error) => error,
+    let columns = match parse_instances(bytes) {
+        Ok(columns) => columns,
+        Err(error) => return error,
+    };
+    if columns.len() != 1
+        || (columns[0].len() != 1 && columns[0].len() != HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS + 1)
+    {
+        return RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT;
     }
+    RUSTCRYPTO_OK
 }
 
 fn guard(f: impl FnOnce() -> c_int) -> c_int {
@@ -1128,6 +1363,7 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = include_str!("../../tests/fixtures/halo2_ipa_bn254_v1.hex");
+    const POSEIDON2_FIXTURE: &str = include_str!("../../tests/fixtures/halo2_ipa_poseidon2_v1.hex");
 
     fn unhex(text: &str) -> Vec<u8> {
         assert!(text.len() % 2 == 0, "odd-length hex");
@@ -1151,6 +1387,15 @@ mod tests {
             fixture_value(FIXTURE, "PROOF"),
             fixture_value(FIXTURE, "INSTANCES"),
             fixture_value(FIXTURE, "WITNESS"),
+        )
+    }
+
+    fn poseidon2_fixture_parts() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+        (
+            fixture_value(POSEIDON2_FIXTURE, "VK"),
+            fixture_value(POSEIDON2_FIXTURE, "PROOF"),
+            fixture_value(POSEIDON2_FIXTURE, "INSTANCES"),
+            fixture_value(POSEIDON2_FIXTURE, "WITNESS"),
         )
     }
 
@@ -1454,14 +1699,14 @@ mod tests {
         );
 
         let mut unknown_circuit = vk.clone();
-        unknown_circuit[8..12].copy_from_slice(&2u32.to_be_bytes());
+        unknown_circuit[8..12].copy_from_slice(&3u32.to_be_bytes());
         assert_eq!(
             validate_vk(&unknown_circuit),
             RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA
         );
 
         let mut unknown_circuit_pk = pk.clone();
-        unknown_circuit_pk[8..12].copy_from_slice(&2u32.to_be_bytes());
+        unknown_circuit_pk[8..12].copy_from_slice(&3u32.to_be_bytes());
         assert_eq!(
             validate_pk(&unknown_circuit_pk),
             RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA
@@ -1491,7 +1736,7 @@ mod tests {
     fn prepare_parameter_and_pointer_errors() {
         assert_eq!(
             rustcrypto_halo2_ipa_bn254_prepare(
-                2,
+                3,
                 8,
                 core::ptr::null_mut(),
                 0,
@@ -1502,6 +1747,22 @@ mod tests {
             ),
             RUSTCRYPTO_ERR_INVALID_PARAMETER
         );
+        // Circuit id 2 requires k >= 7.
+        for &too_small in &[4u32, 6u32] {
+            assert_eq!(
+                rustcrypto_halo2_ipa_bn254_prepare(
+                    2,
+                    too_small,
+                    core::ptr::null_mut(),
+                    0,
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                    0,
+                    core::ptr::null_mut()
+                ),
+                RUSTCRYPTO_ERR_INVALID_PARAMETER
+            );
+        }
         assert_eq!(
             rustcrypto_halo2_ipa_bn254_prepare(
                 1,
@@ -1690,5 +1951,215 @@ mod tests {
             RUSTCRYPTO_ERR_INVALID_PARAMETER
         );
         assert_eq!(out_len, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Circuit id 2: 3-input Poseidon2 hash
+    // ------------------------------------------------------------------
+
+    const POSEIDON2_DIGEST_HEX: &str =
+        "23864adb160dddf590f1d3303683ebcb914f828e2635f6e85a32f0a1aecd3dd8";
+
+    fn poseidon2_inputs() -> [Fr; HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS] {
+        [Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)]
+    }
+
+    fn poseidon2_digest() -> Fr {
+        fr_from_be(&unhex(POSEIDON2_DIGEST_HEX)).expect("digest")
+    }
+
+    fn poseidon2_witness(inputs: [Fr; HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS]) -> Vec<u8> {
+        inputs
+            .iter()
+            .flat_map(|value| encode_fr_be(*value))
+            .collect()
+    }
+
+    #[test]
+    fn poseidon2_fixture_verifies_through_c_abi() {
+        let (vk, proof, instances, witness) = poseidon2_fixture_parts();
+        assert_eq!(
+            witness.len(),
+            HALO2_IPA_BN254_POSEIDON2_HASH3_INPUTS * FR_BYTES
+        );
+        assert_eq!(&witness[..], &poseidon2_witness(poseidon2_inputs())[..]);
+        assert_eq!(validate_vk(&vk), RUSTCRYPTO_OK);
+        assert_eq!(validate_proof(&proof), RUSTCRYPTO_OK);
+        assert_eq!(validate_instances(&instances), RUSTCRYPTO_OK);
+        assert_eq!(verify(&vk, &proof, &instances), RUSTCRYPTO_OK);
+        assert_eq!(verify(&vk, &proof, &instances), RUSTCRYPTO_OK);
+
+        // Circuit id / k / shape are all in the fixture envelope.
+        assert_eq!(
+            read_u32_be(&vk, 8).unwrap(),
+            HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1
+        );
+        assert_eq!(read_u32_be(&vk, 12).unwrap(), 8);
+
+        let expected_instances = encode_instances_v1(&[{
+            let [i0, i1, i2] = poseidon2_inputs();
+            vec![poseidon2_digest(), i0, i1, i2]
+        }])
+        .expect("instances");
+        assert_eq!(instances, expected_instances);
+    }
+
+    #[test]
+    fn poseidon2_prepare_prove_verify_roundtrip() {
+        let circuit_id = HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1;
+        let k = 8u32;
+        let (vk, pk) = generate_poseidon2_key_material_v1(k).expect("keygen");
+        assert_eq!(validate_vk(&vk), RUSTCRYPTO_OK);
+        assert_eq!(validate_pk(&pk), RUSTCRYPTO_OK);
+        assert_eq!(read_u32_be(&vk, 8).unwrap(), circuit_id);
+
+        let [i0, i1, i2] = poseidon2_inputs();
+        let instances =
+            encode_instances_v1(&[vec![poseidon2_digest(), i0, i1, i2]]).expect("instances");
+        let witness = poseidon2_witness(poseidon2_inputs());
+
+        let mut proof = vec![0u8; 16384];
+        let mut proof_len = 0usize;
+        assert_eq!(
+            rustcrypto_halo2_ipa_bn254_prove(
+                pk.as_ptr(),
+                pk.len(),
+                witness.as_ptr(),
+                witness.len(),
+                instances.as_ptr(),
+                instances.len(),
+                proof.as_mut_ptr(),
+                proof.len(),
+                &mut proof_len,
+            ),
+            RUSTCRYPTO_OK
+        );
+        proof.truncate(proof_len);
+        assert_eq!(validate_proof(&proof), RUSTCRYPTO_OK);
+        assert_eq!(verify(&vk, &proof, &instances), RUSTCRYPTO_OK);
+
+        // A different digest is a valid envelope but an invalid proof.
+        let wrong_instances =
+            encode_instances_v1(&[vec![poseidon2_digest() + Fr::from(1u64), i0, i1, i2]])
+                .expect("instances");
+        assert_eq!(
+            verify(&vk, &proof, &wrong_instances),
+            RUSTCRYPTO_ERR_VERIFICATION_FAILED
+        );
+
+        // A witness that disagrees with the public inputs is rejected before
+        // proving.
+        let wrong_witness = poseidon2_witness([Fr::from(1u64), Fr::from(2u64), Fr::from(4u64)]);
+        let mut out = [0u8; 16384];
+        let mut out_len = 0usize;
+        assert_eq!(
+            rustcrypto_halo2_ipa_bn254_prove(
+                pk.as_ptr(),
+                pk.len(),
+                wrong_witness.as_ptr(),
+                wrong_witness.len(),
+                instances.as_ptr(),
+                instances.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut out_len,
+            ),
+            RUSTCRYPTO_ERR_INVALID_PARAMETER
+        );
+        assert_eq!(out_len, 0);
+
+        // The cubic witness length (32 bytes) is not a Poseidon2 witness.
+        let short_witness = encode_fr_be(Fr::from(1u64));
+        assert_eq!(
+            rustcrypto_halo2_ipa_bn254_prove(
+                pk.as_ptr(),
+                pk.len(),
+                short_witness.as_ptr(),
+                short_witness.len(),
+                instances.as_ptr(),
+                instances.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut out_len,
+            ),
+            RUSTCRYPTO_ERR_INVALID_LENGTH
+        );
+    }
+
+    #[test]
+    fn poseidon2_wrong_shape_and_noncanonical_are_rejected() {
+        let (vk, proof, instances, witness) = poseidon2_fixture_parts();
+
+        // One value is the cubic shape, not the Poseidon2 shape.
+        let one_value = encode_instances_v1(&[vec![poseidon2_digest()]]).expect("instances");
+        assert_eq!(
+            verify(&vk, &proof, &one_value),
+            RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT
+        );
+
+        // Two values match neither registered shape.
+        let two_values =
+            encode_instances_v1(&[vec![poseidon2_digest(), Fr::from(1u64)]]).expect("instances");
+        assert_eq!(
+            verify(&vk, &proof, &two_values),
+            RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT
+        );
+        assert_eq!(
+            validate_instances(&two_values),
+            RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT
+        );
+        assert_eq!(validate_instances(&instances), RUSTCRYPTO_OK);
+
+        // The cubic 1x1 shape is still accepted by the circuit-agnostic
+        // envelope validator.
+        assert_eq!(validate_instances(&one_value), RUSTCRYPTO_OK);
+
+        let mut noncanonical = instances;
+        let input_start = INSTANCES_HEADER_LEN + 4 + FR_BYTES;
+        noncanonical[input_start..input_start + FR_BYTES].fill(0xff);
+        assert_eq!(
+            validate_instances(&noncanonical),
+            RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT
+        );
+        assert_eq!(
+            verify(&vk, &proof, &noncanonical),
+            RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT
+        );
+
+        // A non-canonical witness is rejected before proving.
+        let (_, pk) = generate_poseidon2_key_material_v1(8).expect("keygen");
+        let mut bad_witness = witness;
+        bad_witness[..FR_BYTES].fill(0xff);
+        let mut out = [0u8; 16384];
+        let mut out_len = 0usize;
+        let instances = encode_instances_v1(&[{
+            let [i0, i1, i2] = poseidon2_inputs();
+            vec![poseidon2_digest(), i0, i1, i2]
+        }])
+        .expect("instances");
+        assert_eq!(
+            rustcrypto_halo2_ipa_bn254_prove(
+                pk.as_ptr(),
+                pk.len(),
+                bad_witness.as_ptr(),
+                bad_witness.len(),
+                instances.as_ptr(),
+                instances.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut out_len,
+            ),
+            RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT
+        );
+    }
+
+    #[test]
+    fn poseidon2_tampered_proof_is_rejected() {
+        let (vk, mut proof, instances, _) = poseidon2_fixture_parts();
+        let last = proof.len() - 1;
+        proof[last] ^= 0x01;
+        let status = verify(&vk, &proof, &instances);
+        assert_ne!(status, RUSTCRYPTO_OK, "tampered proof accepted");
+        assert_ne!(status, RUSTCRYPTO_ERR_PANIC, "tampered proof panicked");
     }
 }

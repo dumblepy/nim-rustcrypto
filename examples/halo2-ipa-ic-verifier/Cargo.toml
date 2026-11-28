@@ -9,6 +9,9 @@ crate-type = ["cdylib"]
 [features]
 # Excludes the HALO2 IPA prover/keygen symbols and OS entropy from the module.
 halo2-ipa-verify-only = []
+# Reuses one deterministic `ParamsIPA` across verify calls in a canister
+# instance (heap-only, lost on upgrade; not a trusted-SRS cache).
+halo2-ipa-params-cache = []
 
 [dependencies]
 ark-bn254 = "0.5"

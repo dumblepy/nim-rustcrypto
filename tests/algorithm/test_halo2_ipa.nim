@@ -5,16 +5,27 @@ import ../../src/rustcrypto/algorithm/halo2_ipa
 import ../../src/rustcrypto/algorithm/bn254
 
 const Fixture = staticRead("../fixtures/halo2_ipa_bn254_v1.hex")
+const Poseidon2Fixture = staticRead("../fixtures/halo2_ipa_poseidon2_v1.hex")
 
 const
+  ## v1 instances envelope: magic (8) + column_count u32 (4).
+  IpaInstancesHeaderLen = 12
+  ## value_count u32 that precedes each instance column.
+  IpaInstanceValueCountLen = 4
+
+const
+  FrOneHex = "0000000000000000000000000000000000000000000000000000000000000001"
+  FrTwoHex = "0000000000000000000000000000000000000000000000000000000000000002"
   FrThreeHex = "0000000000000000000000000000000000000000000000000000000000000003"
   FrThirtyFiveHex = "0000000000000000000000000000000000000000000000000000000000000023"
   FrThirtySixHex = "0000000000000000000000000000000000000000000000000000000000000024"
   FrFourHex = "0000000000000000000000000000000000000000000000000000000000000004"
+  Poseidon2DigestHex =
+    "23864adb160dddf590f1d3303683ebcb914f828e2635f6e85a32f0a1aecd3dd8"
 
-proc fixtureValue(name: string): seq[byte] =
+proc fixtureValue(fixture: string; name: string): seq[byte] =
   ## Parses a `NAME=hex` fixture line; accepts lowercase and uppercase hex.
-  for rawLine in Fixture.splitLines():
+  for rawLine in fixture.splitLines():
     let line = rawLine.strip()
     let separator = line.find('=')
     if separator <= 0 or line[0 ..< separator].strip() != name:
@@ -29,10 +40,28 @@ proc fixtureValue(name: string): seq[byte] =
   raise newException(ValueError, "missing fixture value: " & name)
 
 let
-  VerifyingKey = fixtureValue("VK")
-  Proof = fixtureValue("PROOF")
-  Instances = fixtureValue("INSTANCES")
-  Witness = fixtureValue("WITNESS")
+  VerifyingKey = fixtureValue(Fixture, "VK")
+  Proof = fixtureValue(Fixture, "PROOF")
+  Instances = fixtureValue(Fixture, "INSTANCES")
+  Witness = fixtureValue(Fixture, "WITNESS")
+  Poseidon2Vk = fixtureValue(Poseidon2Fixture, "VK")
+  Poseidon2Proof = fixtureValue(Poseidon2Fixture, "PROOF")
+  Poseidon2Instances = fixtureValue(Poseidon2Fixture, "INSTANCES")
+  Poseidon2Witness = fixtureValue(Poseidon2Fixture, "WITNESS")
+
+proc poseidon2Witness(
+    inputs: array[3, Bn254Fr]
+): seq[byte] =
+  ## Concatenates three canonical BE `Fr` values into the id-2 witness.
+  for input in inputs:
+    result.add input
+
+proc poseidon2Inputs(): array[3, Bn254Fr] =
+  [
+    fromHexFr(FrOneHex),
+    fromHexFr(FrTwoHex),
+    fromHexFr(FrThreeHex),
+  ]
 
 proc rejected(
     verifyingKey, proof, publicInstances: openArray[byte]
@@ -162,8 +191,126 @@ suite "halo2 ipa bn254 (transparent, no trusted setup)":
     expect ValueError:
       discard Halo2IpaBn254.prove(provingPk, @[], instances)
     expect ValueError:
-      discard Halo2IpaBn254.prepare(2'u32, 8'u32)
+      discard Halo2IpaBn254.prepare(3'u32, 8'u32)
     expect ValueError:
       discard Halo2IpaBn254.prepare(Halo2IpaBn254CircuitCubicV1, 3'u32)
     expect ValueError:
       discard Halo2IpaBn254.prepare(Halo2IpaBn254CircuitCubicV1, 17'u32)
+    expect ValueError:
+      discard Halo2IpaBn254.prepare(
+        Halo2IpaBn254CircuitPoseidon2Hash3V1, 6'u32
+      )
+    expect ValueError:
+      discard Halo2IpaBn254.prepare(
+        Halo2IpaBn254CircuitPoseidon2Hash3V1, 17'u32
+      )
+
+  test "poseidon2 fixture encodings are valid and the proof verifies":
+    check Poseidon2Witness.len == 3 * Bn254FrLen
+    check Halo2IpaBn254.validateVerifyingKey(Poseidon2Vk)
+    check Halo2IpaBn254.validateProof(Poseidon2Proof)
+    check Halo2IpaBn254.validatePublicInstances(Poseidon2Instances)
+    check Halo2IpaBn254.verify(Poseidon2Vk, Poseidon2Proof, Poseidon2Instances)
+    # Repeated verification is side-effect free.
+    check Halo2IpaBn254.verify(Poseidon2Vk, Poseidon2Proof, Poseidon2Instances)
+    # The fixture is the registered circuit id 2.
+    let circuitId =
+      uint32(Poseidon2Vk[8]) shl 24 or
+      uint32(Poseidon2Vk[9]) shl 16 or
+      uint32(Poseidon2Vk[10]) shl 8 or
+      uint32(Poseidon2Vk[11])
+    check circuitId == Halo2IpaBn254CircuitPoseidon2Hash3V1
+
+  test "encodePoseidon2HashInstances matches the fixture instances":
+    let inputs = poseidon2Inputs()
+    let digest = fromHexFr(Poseidon2DigestHex)
+    check encodePoseidon2HashInstances(inputs, digest) == Poseidon2Instances
+    check poseidon2Witness(inputs) == Poseidon2Witness
+
+    var noncanonical = poseidon2Inputs()
+    for i in 0 ..< noncanonical[0].len:
+      noncanonical[0][i] = 0xFF
+    expect ValueError:
+      discard encodePoseidon2HashInstances(
+        noncanonical, fromHexFr(Poseidon2DigestHex)
+      )
+
+  test "poseidon2 rejects a wrong digest and modified proof":
+    # The digest is the first 32 bytes after the instances header.
+    let digestStart = IpaInstancesHeaderLen + IpaInstanceValueCountLen
+    var wrongDigest = Poseidon2Instances
+    wrongDigest[digestStart + Bn254FrLen - 1] =
+      wrongDigest[digestStart + Bn254FrLen - 1] xor 1
+    check Halo2IpaBn254.validatePublicInstances(wrongDigest)
+    check not Halo2IpaBn254.verify(
+      Poseidon2Vk, Poseidon2Proof, wrongDigest
+    )
+
+    var tamperedLast = Poseidon2Proof
+    tamperedLast[^1] = tamperedLast[^1] xor 1
+    check rejected(Poseidon2Vk, tamperedLast, Poseidon2Instances)
+
+    var tamperedFirst = Poseidon2Proof
+    tamperedFirst[0] = tamperedFirst[0] xor 1
+    check rejected(Poseidon2Vk, tamperedFirst, Poseidon2Instances)
+
+    expect ValueError:
+      discard Halo2IpaBn254.verify(
+        Poseidon2Vk,
+        Poseidon2Proof[0 ..< Poseidon2Proof.len - 1],
+        Poseidon2Instances,
+      )
+
+  test "poseidon2 rejects non-canonical and wrong-shaped instances":
+    let inputStart = IpaInstancesHeaderLen + IpaInstanceValueCountLen + Bn254FrLen
+    var noncanonical = Poseidon2Instances
+    for i in inputStart ..< inputStart + Bn254FrLen:
+      noncanonical[i] = 0xFF
+    check not Halo2IpaBn254.validatePublicInstances(noncanonical)
+    expect ValueError:
+      discard Halo2IpaBn254.verify(
+        Poseidon2Vk, Poseidon2Proof, noncanonical
+      )
+
+    let oneValue = encodePublicInstances([fromHexFr(Poseidon2DigestHex)])
+    check rejected(Poseidon2Vk, Poseidon2Proof, oneValue)
+    expect ValueError:
+      discard Halo2IpaBn254.verify(
+        Poseidon2Vk,
+        Poseidon2Proof,
+        encodePublicInstances(
+          [fromHexFr(Poseidon2DigestHex), fromHexFr(FrOneHex)]
+        ),
+      )
+
+  test "poseidon2 prepare/prove/verify roundtrip":
+    let (provingVk, provingPk) = Halo2IpaBn254.prepare(
+      Halo2IpaBn254CircuitPoseidon2Hash3V1, 8'u32
+    )
+    check Halo2IpaBn254.validateVerifyingKey(provingVk)
+    check Halo2IpaBn254.validateProvingKey(provingPk)
+
+    let inputs = poseidon2Inputs()
+    let digest = fromHexFr(Poseidon2DigestHex)
+    let witness = poseidon2Witness(inputs)
+    let instances = encodePoseidon2HashInstances(inputs, digest)
+    let proof = Halo2IpaBn254.prove(provingPk, witness, instances)
+    check Halo2IpaBn254.validateProof(proof)
+    check Halo2IpaBn254.verify(provingVk, proof, instances)
+
+    var wrongDigest = instances
+    wrongDigest[IpaInstancesHeaderLen + IpaInstanceValueCountLen + Bn254FrLen - 1] =
+      wrongDigest[IpaInstancesHeaderLen + IpaInstanceValueCountLen + Bn254FrLen - 1] xor 1
+    check not Halo2IpaBn254.verify(provingVk, proof, wrongDigest)
+
+    # A witness that disagrees with the public inputs is rejected.
+    var wrongWitness = poseidon2Witness(inputs)
+    wrongWitness[^1] = wrongWitness[^1] xor 1
+    expect ValueError:
+      discard Halo2IpaBn254.prove(provingPk, wrongWitness, instances)
+
+    # The cubic witness length (32 bytes) is not a Poseidon2 witness.
+    expect ValueError:
+      discard Halo2IpaBn254.prove(
+        provingPk, fromHexFr(FrOneHex), instances
+      )

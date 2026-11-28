@@ -187,16 +187,40 @@ function directGuardCheck(wasmPath, exportName, argSize) {
     const cyclesAfterVerify = await pic.getCyclesBalance(ipaCanister);
     assert.equal(verifyReply.length, 16, 'IPA reply length');
     const verifyStatus = verifyReply.readInt32LE(0);
-    const verifierInstructions = verifyReply.readBigUInt64LE(4);
+    const coldInstructions = verifyReply.readBigUInt64LE(4);
     const verifierPages = verifyReply.readUInt32LE(12);
     assert.equal(verifyStatus, 0, 'fixture proof must verify');
+    // Budget on the cold call: it includes the deterministic params derivation.
     assert(
-      verifierInstructions < MAX_IPA_INSTRUCTIONS,
-      `verifier instruction budget (${verifierInstructions})`,
+      coldInstructions < MAX_IPA_INSTRUCTIONS,
+      `verifier instruction budget (${coldInstructions})`,
     );
     assert(
       verifierPages * 65536 < MAX_IPA_MEMORY_BYTES,
       `verifier memory budget (${verifierPages} pages)`,
+    );
+
+    // Warm-up call: with `halo2-ipa-params-cache` the second valid call should
+    // reuse the per-canister-instance params cache.
+    const warmReply = Buffer.from(
+      await pic.updateCall({ canisterId: ipaCanister, method: 'verify', arg: verifyArg }),
+    );
+    assert.equal(warmReply.length, 16, 'IPA warm reply length');
+    const warmStatus = warmReply.readInt32LE(0);
+    const warmInstructions = warmReply.readBigUInt64LE(4);
+    const warmPages = warmReply.readUInt32LE(12);
+    assert.equal(warmStatus, 0, 'warm fixture proof must verify');
+    assert(
+      warmInstructions < MAX_IPA_INSTRUCTIONS,
+      `warm verifier instruction budget (${warmInstructions})`,
+    );
+    assert(
+      warmPages * 65536 < MAX_IPA_MEMORY_BYTES,
+      `warm verifier memory budget (${warmPages} pages)`,
+    );
+    assert(
+      warmInstructions <= coldInstructions,
+      `warm call (${warmInstructions}) should not exceed cold (${coldInstructions})`,
     );
 
     const tamperedProof = Buffer.from(verifyArg);
@@ -335,9 +359,15 @@ function directGuardCheck(wasmPath, exportName, argSize) {
       wasm: { halo2Ipa: ipa, poseidon2 },
       halo2IpaVerify: {
         status: verifyStatus,
-        verifierInstructions: verifierInstructions.toString(),
+        coldInstructions: coldInstructions.toString(),
+        warmInstructions: warmInstructions.toString(),
+        warmStatus,
+        // Backwards-compatible alias for the pre-cache report shape.
+        verifierInstructions: coldInstructions.toString(),
         memoryPages: verifierPages,
         memoryBytes: verifierPages * 65536,
+        warmMemoryPages: warmPages,
+        warmMemoryBytes: warmPages * 65536,
         updateCyclesDebited: (cyclesBeforeVerify - cyclesAfterVerify).toString(),
         argBytes: verifyArg.length,
         tamperedProofStatus,

@@ -119,6 +119,22 @@ jobs:
             ${{ runner.temp }}/poseidon2-bn254/environment.txt
             ${{ runner.temp }}/poseidon2-bn254/symbols.txt
 
+      - name: Test Poseidon2 Halo2 gate on wasm32-wasip1
+        id: poseidon2_halo2_wasm
+        if: ${{ !cancelled() }}
+        run: ./ci/test_poseidon2_halo2_wasm.sh "$RUNNER_TEMP/poseidon2-halo2-wasm"
+
+      - name: Upload Poseidon2 Halo2 gate wasm report
+        if: ${{ !cancelled() && steps.poseidon2_halo2_wasm.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: poseidon2-halo2-gate-wasm
+          path: |
+            ${{ runner.temp }}/poseidon2-halo2-wasm/environment.txt
+            ${{ runner.temp }}/poseidon2-halo2-wasm/measurements.json
+            ${{ runner.temp }}/poseidon2-halo2-wasm/native.json
+            ${{ runner.temp }}/poseidon2-halo2-wasm/wasm.json
+
       - name: Test Halo2 IPA/BN254 prove in a browser Web Worker
         id: halo2_ipa_web
         if: ${{ !cancelled() }}

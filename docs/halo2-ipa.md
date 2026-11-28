@@ -32,11 +32,12 @@ Rust core: `rustcrypto-ffi/src/halo2_ipa.rs`
 ## 回路レジストリと VK ピン留め
 
 `VerifyingKey::read` / `ProvingKey::read` は具体的な `Circuit` 型を要求するため、
-本モジュールは `u32` の **承認済み回路レジストリ** を持つ。実装済みは次の 1 件のみ。
+本モジュールは `u32` の **承認済み回路レジストリ** を持つ。実装済みは次の 2 件。
 
 | `circuit_id` | 定数 | 回路 |
 |---:|---|---|
-| 1 | `HALO2_IPA_BN254_CIRCUIT_CUBIC_V1` | advice 1 列・instance 1 列・selector 1 個。ゲート `x^3 + x + 5 - y == 0`。witness `x`、公開入力 `y`（1 列 1 値） |
+| 1 | `HALO2_IPA_BN254_CIRCUIT_CUBIC_V1` | advice 1 列・instance 1 列・selector 1 個。ゲート `x^3 + x + 5 - y == 0`。witness `x`（32 バイト）、公開入力 `y`（1 列 1 値）。`4 <= k <= 16` |
+| 2 | `HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1` | `poseidon2_halo2.rs` の固定 3 入力 Poseidon2 hash。witness は 3 個の canonical BE `Fr`（96 バイト）、公開入力は 1 列 `[digest, input0, input1, input2]`（4 値）。`7 <= k <= 16` |
 
 - 回路の追加は **Rust ソース変更 + レビュー** を必須とする。入力バイト列から
   任意の回路コードをロードすることはない。
@@ -74,35 +75,55 @@ int rustcrypto_halo2_ipa_bn254_instances_validate(const uint8_t *instances, size
 ```
 
 - `prepare`: `k` と `circuit_id` を検証し、決定的に params を導出して VK/PK を
-  keygen し、v1 形式で書き出す。乱数は使わない。
-- `prove`: PK をレジストリ回路でパースし、witness（32 バイト canonical BE `Fr`）
-  と公開入力（1 列 1 値）を読み、`y == x^3 + x + 5` を検査してから OS CSPRNG
-  （`rand_core::OsRng`）で証明する。公開入力と witness が食い違う場合は証明を
-  生成せずエラーを返す。
-- `verify`: VK をレジストリ回路でパースし、`k` から params を再生成し、公開
-  入力を検査し、proof transcript を **末尾バイトまで消費** したことを確認して
+  keygen し、v1 形式で書き出す。乱数は使わない。`circuit_id = 2` は 65 行の
+  permutation レイアウトのため `k >= 7` を要求し、`k < 7` は
+  `INVALID_PARAMETER` で拒否する。keygen は登録済み arity（3 入力）の
+  `Poseidon2HashCircuit::new(&[0, 0, 0])` を使う（`Default` の 0 入力では
+  fixed 列が変わるため使わない）。
+- `prove`: PK ヘッダの `circuit_id` を先に読み、回路ごとの witness 長
+  （id 1 は 32 バイト、id 2 は 96 バイト）と公開入力を検査する。
+  - id 1: `y == x^3 + x + 5`。
+  - id 2: witness の 3 入力が公開入力 `input0..2` と一致し、
+    `digest == poseidon2_halo2::hash_output(&inputs)` であることを検査する。
+
+  公開入力と witness が食い違う場合は証明を生成せず `INVALID_PARAMETER`
+  （形状不一致は `INVALID_PUBLIC_INPUT_COUNT`）を返す。証明は OS CSPRNG
+  （`rand_core::OsRng`）で生成する。
+- `verify`: VK をレジストリ回路でパースし、`circuit_id` に対応する公開入力
+  形状（1 値または 4 値）を検査し、`k` から params を再生成（任意でキャッシュ）
+  し、proof transcript を **末尾バイトまで消費** したことを確認して
   `SingleStrategy`（乱数を要求しない単一証明検証）で判定する。
 - `*_validate`: 安価な構造検証。VK/PK はレジストリ回路によるデコードまで行う。
   proof は v1 エンベロープ（magic・長さ・末尾バイト）を、instances は全要素の
-  canonical `Fr` まで検査する。
+  canonical `Fr` と登録済み形状（1 列 1 値または 1 列 4 値）を検査する。
 
 ### Nim の想定 API（type-first）
 
 ```nim
 import rustcrypto/algorithm/halo2_ipa
 
+# circuit 1: y = x^3 + x + 5
 let (vk, pk) = Halo2IpaBn254.prepare(Halo2IpaBn254CircuitCubicV1, 8)
-let instances = Halo2IpaBn254.encodePublicInstances([y])  # y = x^3 + x + 5
+let instances = Halo2IpaBn254.encodePublicInstances([y])
 let proof = Halo2IpaBn254.prove(pk, witnessBytes, instances)
 
-if Halo2IpaBn254.verify(vk, proof, instances):
+# circuit 2: 3-input Poseidon2 hash (digest of inputs[0..2])
+let (vk2, pk2) = Halo2IpaBn254.prepare(
+  Halo2IpaBn254CircuitPoseidon2Hash3V1, 8
+)
+let instances2 = encodePoseidon2HashInstances([input0, input1, input2], digest)
+let witness3 = input0 & input1 & input2   # 96 bytes
+let proof2 = Halo2IpaBn254.prove(pk2, witness3, instances2)
+
+if Halo2IpaBn254.verify(vk2, proof2, instances2):
   echo "valid for this profile and key"
 ```
 
 `prepare` は `(verifyingKey, provingKey)`、`prove` は `seq[byte]`、
-`verify` は `bool` を返す想定。`validateVerifyingKey` /
-`validateProvingKey` / `validateProof` / `validatePublicInstances` も同様に
-`bool` を返す。Nim ラッパー本体は本 Rust コアの変更対象外である。
+`verify` は `bool` を返す想定。`prove` は PK ヘッダの circuit id から
+witness 長を決める（id 1 = 32 バイト、id 2 = 96 バイト）。
+`validateVerifyingKey` / `validateProvingKey` / `validateProof` /
+`validatePublicInstances` も同様に `bool` を返す。
 
 ### エラーステータス
 
@@ -132,7 +153,7 @@ if Halo2IpaBn254.verify(vk, proof, instances):
 | Offset | Size | Field |
 |---|---:|---|
 | 0 | 8 | magic `"RCH2IPV1"` |
-| 8 | 4 | `circuit_id`（現在は `1` のみ） |
+| 8 | 4 | `circuit_id`（`1` = cubic v1、`2` = Poseidon2 hash3） |
 | 12 | 4 | `k`（4..=16） |
 | 16 | 4 | `vk_len`（1..=4 MiB） |
 | 20 | `vk_len` | `halo2_axiom` の `SerdeFormat::Processed` による VK |
@@ -177,15 +198,20 @@ PK は先頭に VK を含む。デコード前に内部の多項式長・ベク�
 - 合計値数は 4096 以下。
 - 各 `Fr` は BN254 `Fr` の **canonical ビッグエンディアン 32 バイト**。
   非 canonical（例: `0xff` × 32）は `INVALID_FIELD_ELEMENT`。
-- 登録回路（cubic v1）は 1 列 1 値のみを受け付ける。それ以外は
-  `INVALID_PUBLIC_INPUT_COUNT`。
+- 登録回路の instance 形状のみを受け付ける:
+  - id 1（cubic）: 1 列 1 値。
+  - id 2（Poseidon2 hash3）: 1 列 4 値 `[digest, input0, input1, input2]`。
+
+  それ以外は `INVALID_PUBLIC_INPUT_COUNT`。ただし circuit id を受け取らない
+  `instances_validate` は、1 列 1 値または 1 列 4 値のいずれかであれば OK を
+  返す。
 - `column_count == 0` は拒否する。
 
 ### サイズ・`k` の上限
 
 | 項目 | 上限 |
 |---|---:|
-| `k` | 4..=16 |
+| `k` | 4..=16（id 2 は 7..=16） |
 | VK ペイロード | 4 MiB |
 | PK ペイロード | 64 MiB |
 | proof transcript | 4 MiB |
@@ -212,14 +238,25 @@ cargo run --example halo2_ipa_fixture [output.hex]
 - C ABI の `prove` は常に `OsRng` を使う。固定 seed は fixture 専用であり、
   本番経路では使わない。
 
-`cargo test --lib halo2_ipa` は次を確認する（11 テスト）:
+`rustcrypto-ffi/examples/halo2_ipa_poseidon2_fixture.rs` が k=8・
+`circuit_id=2`・入力 `[1, 2, 3]` の fixture を生成する。出力は
+`tests/fixtures/halo2_ipa_poseidon2_v1.hex`。digest は
+`23864adb160dddf590f1d3303683ebcb914f828e2635f6e85a32f0a1aecd3dd8`。
 
-- `prepare` / `prove` / `verify` の k=8 ラウンドトリップ。
-- committed fixture を C ABI 経由で検証（正常系・繰り返し呼び出し）。
+```text
+cargo run --locked --release --example halo2_ipa_poseidon2_fixture [output.hex]
+```
+
+`cargo test --lib halo2_ipa` は次を確認する（15 テスト）:
+
+- `prepare` / `prove` / `verify` の k=8 ラウンドトリップ（cubic と Poseidon2）。
+- 両 committed fixture を C ABI 経由で検証（正常系・繰り返し呼び出し）。
 - 公開入力の改ざん → `VERIFICATION_FAILED`。
 - proof バイト改ざん → 非 OK（panic しない）。
 - VK/PK/instances の切り詰め・末尾バイト・内部長の巨大化 → 具体的エラー。
-- 非 canonical `Fr`、列数・値数の不一致。
+- 非 canonical `Fr`、列数・値数の不一致、circuit 2 の 1 値/2 値/32 バイト
+  witness の拒否。
+- circuit 2 の `k < 7` → `INVALID_PARAMETER`。
 - 不正 magic、未知 `circuit_id`、`k<4` / `k>16`、KZG magic の相互拒否。
 - 空入力、NULL 入力、NULL 出力、短い出力バッファ。
 
@@ -240,6 +277,21 @@ cargo run --example halo2_ipa_fixture [output.hex]
 概算時間（デバッグビルド、この環境）: fixture 生成（keygen + prove + 1 回の
 verify）で約 5.7 秒、検証 1 回は約 1.5 秒。これは小さなデモ回路の値であり、
 一般的な R1CS フロントエンドの性能ではない。
+
+Poseidon2 hash3（k=8、`cargo run --locked --release --example
+halo2_ipa_poseidon2_fixture`）の観測値:
+
+| 項目 | サイズ |
+|---|---:|
+| VK ペイロード | 1,194 バイト |
+| VK（v1 エンコード） | 1,214 バイト |
+| PK ペイロード | 632,302 バイト |
+| PK（v1 エンコード） | 632,322 バイト |
+| proof transcript | 5,600 バイト |
+| proof（v1 エンコード） | 5,612 バイト |
+| instances | 144 バイト |
+| witness | 96 バイト |
+| fixture ファイル | 14,163 バイト |
 
 WASM smoke（release、`ci/test_halo2_ipa_wasm.sh`）の出力サイズ:
 
@@ -266,10 +318,15 @@ WASM の命令数・cycle・peak memory は未計測。
 - VK/PK は呼び出し側が与える信頼入力である。本ライブラリは構造検証と証明
   検証のみを行い、回路がアプリケーションの意図する命題を表すことまでは保証
   しない。承認済み VK のピン留めはアプリケーションの責任。
-- `verify` は VK ヘッダの `k` から `ParamsIPA::new(k)` を毎回再生成する。
+- `verify` は VK ヘッダの `k` から `ParamsIPA::new(k)` を再生成する。
   `k <= 16` に制限しているが、`k` が大きいほど CPU/メモリコストが増える。
-  信頼済み VK を pin し、繰り返し検証する利用側では `k` ごとの params を
-  上位でキャッシュすることを推奨する。`vk_validate` は params を生成しない。
+  optional feature `halo2-ipa-params-cache` を有効にすると、thread-local の
+  単一スロットに `(k, ParamsIPA)` を保持し、同一 `k` の検証で clone を再利用
+  する。これは **canister インスタンスごとの heap メモリ** であり、upgrade で
+  失われ、trusted SRS のキャッシュではない（params は `k` から決定的に導出
+  される）。既定（feature off）は毎回再生成する。信頼済み VK を pin し、
+  繰り返し検証する利用側ではこの feature の利用を推奨する。
+  `vk_validate` は params を生成しない。
 - 入力長・列数・値数・proof/PK の多項式長は decode/allocate 前に検査する。
   不正な PK の巨大 length で `Vec` を確保しないよう、独自の非割当スキャンを
   行う。
@@ -283,17 +340,24 @@ WASM の命令数・cycle・peak memory は未計測。
 
 ## 未対応（明示）
 
-- **Poseidon2 の Halo2 custom gate は Rust typed API のデモ専用**。
-  `src/poseidon2_halo2.rs` と `examples/poseidon2_halo2_ipa.rs` に全64 round を
-  制約する回路と IPA 証明/検証があるが、`rustcrypto_halo2_ipa_bn254_*` の
-  circuit id には未登録で、Nim からは呼べない。詳細は
+- **Poseidon2 hash3 は circuit id 2 として登録済み**（witness 96 バイト、公開
+  入力 `[digest, input0, input1, input2]`、`k >= 7`）。Nim からも
+  `Halo2IpaBn254CircuitPoseidon2Hash3V1` と `encodePoseidon2HashInstances` で
+  利用できる。ただし **arity は 3 固定** であり、0/1/2/4/6/8/9/12 入力の
+  Poseidon2 sponge や Poseidon1 gate はまだ circuit id を持たない。詳細は
   [`poseidon2-halo2-gate.md`](poseidon2-halo2-gate.md)。
 - 任意の回路記述子 / Noir フロントエンド。回路は Rust のレジストリに
   コンパイル時登録されたものだけ。
 - 一般的な R1CS フロントエンドとしての利用。本モジュールは小さなデモ回路
-  （cubic v1）専用である。
-- Poseidon1 の Halo2 custom gate は未実装のため、Poseidon1 vs Poseidon2 の
-  Halo2 rows/proof size 比較は apples-to-apples ではない。
+  （cubic v1 と Poseidon2 hash3）専用である。
+- Poseidon2 hash 回路自体の **wasm32-wasip1** 実行は完了
+  （[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）。browser Worker /
+  ICP 上での Poseidon2 witness 生成・prove は未実装（canister の proof 検証は
+  circuit id 2 に対応）。
+- Poseidon1 の Halo2 custom gate は**比較用に実装済み**
+  （[`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md)）。同一 k=10・同一
+  IPA での rows/VK/PK/proof 比較は [`benchmarks-branch85.md`](benchmarks-branch85.md)
+  に記録。width 4・3 入力固定で、C ABI/Nim には未登録。
 
 ## 実装済みになった項目
 
@@ -303,14 +367,21 @@ WASM の命令数・cycle・peak memory は未計測。
   確認済み。詳細は [`ic-branch85.md`](ic-branch85.md)。この feature は
   prover API を削除するため、fixture generator や Nim の `prepare`/`prove`
   を同時に使うビルドでは有効にしない。
+- **IPA params cache feature**: `halo2-ipa-params-cache` で thread-local の
+  単一 `ParamsIPA` を再利用できる。cold/warm の区別、canister インスタンス
+  単位・upgrade で失われる点は [`ic-branch85.md`](ic-branch85.md) を参照。
+- **Poseidon2 hash3 circuit (id 2)**: 3 入力固定の Poseidon2 sponge を
+  `rustcrypto_halo2_ipa_bn254_*` と Nim から利用可能。committed fixture は
+  `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。
 - **ICP canister**: VK をビルド時に pin した raw update verifier を PocketIC で
-  実行済み。instructions 18,226,458,332（k=8、params 再生成を含む）、
-  memory 53 pages。
+  実行済み。params 再生成を含む cold call の instructions、および cache 済み
+  warm call の instructions は [`ic-branch85.md`](ic-branch85.md) を参照。
+  memory は 53 pages 程度。
 - **Browser Web Worker prove**: COOP/COEP なし・`crossOriginIsolated=false` の
   Chromium で Worker 内 prepare/prove を実行し、Node 側の独立 wasm でも検証。
   実測（k=8、cubic v1）: prepare 約 1.9–4.1 s、prove 約 2.6–4.9 s、
-  verify 約 1.6–2.2 s、wasm 3,697,155 B、linear memory は prepare 約 3.9 MB /
-  prove・verify 約 8.1 MB。`SharedArrayBuffer` は不使用。
+  verify 約 1.6–2.2 s、wasm 3,962,513 B（circuit id 2 登録後）、linear memory は
+  prepare 約 3.9 MB / prove・verify 約 8.1 MB。`SharedArrayBuffer` は不使用。
 - **ベンチ**: R1CS 形状・native 時間・IPA 1k/20k 相当の合成回路を実測。
   [`benchmarks-branch85.md`](benchmarks-branch85.md)。なお 20k 回路は
   アプリケーション等価ではなく形状ベンチである。

@@ -20,6 +20,15 @@ mod aead_common;
 #[path = "../../../rustcrypto-ffi/src/bn254.rs"]
 #[allow(dead_code)]
 mod bn254;
+// The circuit registry decodes circuit id 2 with `Poseidon2HashCircuit`, so
+// the verifier compiles the Poseidon2 hash module and its constants. No C ABI
+// entry point of those modules is reachable from the canister update.
+#[path = "../../../rustcrypto-ffi/src/poseidon2.rs"]
+#[allow(dead_code)]
+mod poseidon2;
+#[path = "../../../rustcrypto-ffi/src/poseidon2_halo2.rs"]
+#[allow(dead_code)]
+mod poseidon2_halo2;
 #[path = "../../../rustcrypto-ffi/src/halo2_ipa.rs"]
 #[allow(dead_code)]
 mod halo2_ipa;

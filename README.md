@@ -36,8 +36,10 @@ The **Halo2 IPA/BN254** profile (no trusted setup) and **Poseidon2/BN254** are a
 verified on both wasm targets. Their wasm smokes execute the committed KATs/fixture
 under Node. The Poseidon2 cdylib has zero host imports; the IPA verifier is executed
 with every imported host function replaced by a throwing stub, proving the verify
-path does not request RNG or OS services. Browser Web Worker proving and a
-verify-only ICP canister (PocketIC-measured) are included. See
+path does not request RNG or OS services. Browser Web Worker proving, a
+verify-only ICP canister with an IPA params cache (PocketIC-measured), a
+registered 3-input Poseidon2 hash circuit (id 2), and a Poseidon2 Halo2
+custom-gate `wasm32-wasip1` prove/verify run are included. See
 [Halo2 IPA docs](docs/halo2-ipa.md) and [Poseidon2 docs](docs/poseidon2-bn254.md).
 Spartan+WHIR is not shipped in this branch: the Phase 0 gate is recorded as blocked
 in [Spartan+WHIR](docs/spartan-whir.md) and
@@ -93,6 +95,8 @@ Per-primitive and per-protocol guides (English):
 - [Poseidon / BN254](docs/poseidon-bn254.md)
 - [Poseidon2 / BN254 (Noir/Barretenberg-compatible)](docs/poseidon2-bn254.md)
 - [Poseidon2 / BN254 Halo2 custom gate (Rust demo)](docs/poseidon2-halo2-gate.md)
+- [Poseidon2 / BN254 Halo2 gate on wasm32-wasip1](docs/poseidon2-halo2-wasm.md)
+- [Poseidon1 / BN254 Halo2 custom gate (comparison demo)](docs/poseidon1-halo2-gate.md)
 - [Groth16 / BN254 verifier](docs/groth16-bn254.md)
 - [PLONK / BN254 verifier (genshi-core profile)](docs/plonk-bn254.md)
 - [Plonky2 / Goldilocks / FRI verifier](docs/plonky2.md)

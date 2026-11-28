@@ -33,7 +33,7 @@ node "$repo_root/web/ic-branch85/extract-fixture.cjs" \
 cd "$repo_root"
 HALO2_IPA_APPROVED_VK="$artifacts/vk.bin" \
   cargo build --locked --release \
-    --features halo2-ipa-verify-only \
+    --features halo2-ipa-verify-only,halo2-ipa-params-cache \
     --manifest-path examples/halo2-ipa-ic-verifier/Cargo.toml \
     --target wasm32-unknown-unknown
 
@@ -63,7 +63,7 @@ const hash = report.poseidon2Hash;
 console.log("IC branch-85 measurements");
 console.log(`  halo2-ipa wasm: ${report.wasm.halo2Ipa.bytes} bytes, ${report.wasm.halo2Ipa.functions.total} functions, imports: ${report.wasm.halo2Ipa.imports.map((i) => i.module + "." + i.name).join(", ")}`);
 console.log(`  poseidon2 wasm: ${report.wasm.poseidon2.bytes} bytes, ${report.wasm.poseidon2.functions.total} functions, imports: ${report.wasm.poseidon2.imports.map((i) => i.module + "." + i.name).join(", ")}`);
-console.log(`  IPA verify: status ${ipa.status}, instructions ${ipa.verifierInstructions}, memory ${ipa.memoryBytes} bytes (${ipa.memoryPages} pages)`);
+console.log(`  IPA verify: status ${ipa.status}, cold instructions ${ipa.coldInstructions}, warm instructions ${ipa.warmInstructions}, memory ${ipa.memoryBytes} bytes (${ipa.memoryPages} pages), warm memory ${ipa.warmMemoryBytes} bytes`);
 console.log(`  Poseidon2 [1,2,3]: status ${hash.status}, instructions ${hash.instructions}, memory ${hash.memoryBytes} bytes, digest ${hash.digest}`);
 console.log(`  tamper/rejection statuses: proof ${ipa.tamperedProofStatus}, instance ${ipa.tamperedInstancesStatus}, oversized ${ipa.oversizedDirectGuard.status}, bad-envelope ${ipa.badEnvelopeStatus}, bad-length ${hash.badLengthStatus}, non-canonical ${hash.nonCanonicalStatus}, >12 inputs ${hash.tooManyStatus}`);
 ' "$artifacts"

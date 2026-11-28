@@ -92,6 +92,10 @@ bulletproofs-r1cs-web-poc = ["bulletproofs-r1cs-poc", "dep:wasm-bindgen"]
 # `rustcrypto_halo2_ipa_bn254_prepare` / `..._prove` symbols, so an ICP
 # canister verifier does not link OS entropy or prover dependencies.
 halo2-ipa-verify-only = []
+# Caches one deterministic `ParamsIPA` per canister instance (thread-local,
+# single k). This is heap memory, not a trusted-SRS cache; it is lost on
+# upgrade.
+halo2-ipa-params-cache = []
 
 [[example]]
 name = "bulletproofs_r1cs_web"

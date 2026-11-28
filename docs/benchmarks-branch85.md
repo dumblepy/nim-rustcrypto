@@ -141,8 +141,38 @@ arity 0 の Poseidon2 は状態がすべて定数になるため制約 0（異�
   再利用する呼び出し形である。
 - **Groth16/R1CS には Halo2 の row / k / padding が存在しない**。そのため
   JSON では `padding: null` とし、「R1CS/Groth16 では Halo2 形式の padded
-  row domain を持たない」と明記している。Poseidon1 の Halo2 custom gate は
-  本ブランチ未実装なので、Halo2 行数や proof size の比較はできない。
+  row domain を持たない」と明記している。Halo2 側の Poseidon1 vs Poseidon2
+  比較は別途実装し、3.4 と
+  [`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md) に記録した。
+
+### 3.4 Halo2 Poseidon1 vs Poseidon2（同一 IPA params）
+
+`rustcrypto-ffi/examples/poseidon1_halo2_ipa.rs` を追加し、Circom 互換
+Poseidon1 の Halo2 custom gate を実装した。Poseidon1 / Poseidon2 の両回路を
+**同一 `ParamsIPA::new(10)`・同一入力 `[1,2,3]`** で keygen / prove / verify
+した native release の実測値:
+
+| circuit | rows | advice | selector | degree | vk bytes | pk bytes | proof bytes | keygen ms | prove ms | verify ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Poseidon1 | 65 | 12 | 4 | 4 | 682 | 1,475,438 | 3,488 | 339.493 | 1,076.713 | 19.014 |
+| Poseidon2 | 65 | 25 | 5 | 4 | 1,194 | 2,524,654 | 5,728 | 499.312 | 985.457 | 22.768 |
+
+- 両回路とも `verified = true`、`wrong_digest_rejected = true`、
+  `tampered_proof_rejected = true`。
+- Poseidon1 の digest は
+  `0e7732d89e6939c0ff03d5e58dab6302f3230e269dc5b968f725df34ab36d732`
+  で、`light-poseidon` の `new_circom(3)` と一致する。
+- rows / instance は同じ 65 / 4。**サイズは決定的**で、VK 0.57 倍、
+  PK 0.58 倍、proof 0.61 倍。advice 列が 12 vs 25 と少ないことが効いている。
+- keygen は Poseidon1 が小さい（2 回の実行で 238.6/339.5 ms vs
+  478.3/499.3 ms）。prove / verify の wall time は実行ノイズが大きく、2 回で
+  順位が入れ替わったため、この実測だけでは優劣を主張しない。
+- `proof_bytes` はこの回路・この PCS・k=10 の値であり、プロトコル固定の
+  proof size ではない。
+- 実行:
+  `cargo run --locked --release --example poseidon1_halo2_ipa`
+- 詳細（gate 式、列、KAT、未監査・C ABI/Nim/wasm 未対応）:
+  [`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md)
 
 ## 4. 汎用 Halo2 IPA 形状ベンチマーク
 
@@ -214,14 +244,15 @@ wall time / peak RSS（`rss.txt`）:
    128-bit range proof、shielded note、資産回路などではない。行数・k・
    prove/verify コストの目安を与えるが、実アプリの制約数や proof size を
    代表しない。
-2. **Poseidon1 の Halo2 custom gate は未実装。** 本ブランチには Poseidon1 の
-   Halo2 gate が無いため、Halo2 の rows/k/lookup、Halo2 proof size、
-   Poseidon1 vs Poseidon2 の Halo2 証明コストを比較できない。R1CS の
-   制約数・nnz と native ハッシュ時間のみ比較している。
-3. **Poseidon1 vs Poseidon2 の proof size 比較は apples-to-apples ではない。**
-   Poseidon2 側の Halo2 gate は `docs/poseidon2-halo2-gate.md` に実装済みだが、
-   同一回路・同一 PCS で Poseidon1 と比較するには Poseidon1 の Halo2 gate が
-   必要であり、本ドキュメントの範囲外。
+2. **Halo2 の Poseidon1 vs Poseidon2 比較は、同一 IPA 形状のデモ回路に限る。**
+   Poseidon1 custom gate を追加し、両回路を同一 `ParamsIPA::new(10)`・同一入力
+   `[1,2,3]` で実測した（3.4）。ただし回路は本番アプリ等価ではなく、C ABI /
+   Nim / wasm / ICP には未登録。値は
+   [`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md) を参照。
+3. **Halo2 の proof size は回路・PCS 固有で、プロトコル定数ではない。**
+   Poseidon1 3,488 B / Poseidon2 5,728 B は k=10・instance 4・この IPA
+   プロファイルでの値であり、回路形状や開点数が変われば変わる。R1CS/Groth16
+   の制約数・nnz と Halo2 の rows/proof size は別物として読むこと。
 4. **WASM instructions / cycles は本ベンチでは未計測。** ここに載せたのは
    native release の時間と RSS のみ。WASM の実行時間・cycle・ICP
    instructions は [`ic-branch85.md`](ic-branch85.md) と
@@ -242,13 +273,16 @@ wall time / peak RSS（`rss.txt`）:
 
 | 項目 | 結果 | 参照 |
 |---|---|---|
-| Browser Web Worker prove（k=8、cubic v1） | prepare 約 1.9–4.1 s、prove 約 2.6–4.9 s、verify 約 1.6–2.2 s、wasm 3,697,155 B、`crossOriginIsolated=false` | `docs/halo2-ipa.md` |
+| Browser Web Worker prove（k=8、cubic v1） | prepare 約 1.9–4.1 s、prove 約 2.6–4.9 s、verify 約 1.6–2.2 s、wasm 3,962,513 B、`crossOriginIsolated=false` | `docs/halo2-ipa.md` |
 | ICP Poseidon2 hash `[1,2,3]` | status 0、866,665 instructions、18 pages（1,179,648 B） | `docs/ic-branch85.md` |
-| ICP Halo2 IPA verify（k=8、cubic v1） | status 0、18,226,458,332 instructions、53 pages（3,473,408 B）。params 再生成が支配的 | `docs/ic-branch85.md` |
+| ICP Halo2 IPA verify（k=8、cubic v1、params cache） | cold 18,226,479,635 / warm 568,422,557 instructions、53 pages（3,473,408 B） | `docs/ic-branch85.md` |
+| Poseidon2 Halo2 gate（k=10、wasm32-wasip1） | VK 1,194 B、PK 2,524,654 B、proof 5,728 B、wasm 9,981,265 B、keygen 約 12.3 s、prove 約 5.6 s、verify 約 0.16 s | `docs/poseidon2-halo2-wasm.md` |
 
 ICP の値はローカル PocketIC の update call であり、mainnet の cycle quote
 ではない。wasm32-wasip1 / wasm32-unknown-unknown の KAT・fixture smoke は
 `ci/test_poseidon2_wasm.sh` と `ci/test_halo2_ipa_wasm.sh` で実行している。
+Poseidon2 Halo2 gate の wasm は `ci/test_poseidon2_halo2_wasm.sh`、
+Browser Worker は `ci/test_halo2_ipa_web.sh` で実行する。
 8. **proof bytes は再現しない可能性がある。** この vendored
    `halo2-axiom` fork は vanishing argument の乱数多項式を内部で
    `thread_rng` から取るため、同一 seed でも proof のバイト列は一致しない

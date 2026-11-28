@@ -156,10 +156,11 @@ WHIR + full ZK + wasm32; `spartan2` does not use WHIR. None was added.
 | Item | Native | `wasm32-unknown-unknown` | `wasm32-wasip1` | Nim | Status |
 |---|---|---|---|---|---|
 | Poseidon2 / BN254 | Rust KAT + Nim tests pass | Runtime smoke pass (0 imports) | Runtime smoke pass | Yes | Implemented |
-| Poseidon2 Halo2 gate | MockProver KATs + IPA example pass | Not executed | Not executed | No (Rust demo only) | Implemented (Rust-only, not a C ABI circuit id) |
-| Halo2 IPA / BN254 | Rust fixtures + Nim tests pass | Runtime smoke pass (host imports stubbed to throw) | Runtime smoke pass | Yes | Implemented (demo circuit) |
-| Halo2 IPA browser prove | — | Chromium Web Worker, `crossOriginIsolated=false` | — | No | Implemented |
-| Halo2 IPA ICP verify | PocketIC update call | verify-only canister, `ic0`-only imports | — | No | Implemented (not mainnet) |
+| Poseidon2 Halo2 gate | MockProver KATs + IPA example pass | Not executed | Runtime prove/verify pass (Node WASI) | Yes (circuit id 2, 3-input fixed) | Implemented |
+| Poseidon1 Halo2 gate | MockProver KAT + IPA comparison pass | Not executed | Not executed | No (comparison demo) | Implemented |
+| Halo2 IPA / BN254 | Rust fixtures + Nim tests pass | Runtime smoke pass (host imports stubbed to throw) | Runtime smoke pass | Yes | Implemented (cubic + Poseidon2 hash3) |
+| Halo2 IPA browser prove | — | Chromium Web Worker, `crossOriginIsolated=false` | — | No | Implemented (cubic circuit) |
+| Halo2 IPA ICP verify | PocketIC update call | verify-only canister, `ic0`-only imports, params cache cold/warm | — | No | Implemented (not mainnet) |
 | Poseidon2 ICP hash | PocketIC update call | canister, `ic0`-only imports | — | No | Implemented (not mainnet) |
 | Spartan+WHIR / BN254 | Not implemented | Not implemented | Not implemented | Not implemented | **Blocked** |
 
@@ -167,7 +168,8 @@ The table is a status record. A successful compile alone is not treated as
 success; the wasm entries are actual Node/WASI/Chromium executions and the ICP
 entries are PocketIC update calls. Measurement references:
 `docs/benchmarks-branch85.md`, `docs/ic-branch85.md`, `docs/halo2-ipa.md`,
-`docs/poseidon2-halo2-gate.md`. Mainnet cycle quotes and a production `dfx`
+`docs/poseidon2-halo2-gate.md`, `docs/poseidon2-halo2-wasm.md`,
+`docs/poseidon1-halo2-gate.md`. Mainnet cycle quotes and a production `dfx`
 deployment are not included.
 
 ## Native smoke benchmark (indicative only)

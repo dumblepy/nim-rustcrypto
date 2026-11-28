@@ -29,15 +29,26 @@ proc prepare*(
   ## Derives the transparent IPA params from `k`, then generates the VK/PK for
   ## an approved built-in circuit. No trusted setup is used and no randomness is
   ## consumed; the same `(circuitId, k)` always yields the same keys.
-  if circuitId != Halo2IpaBn254CircuitCubicV1:
-    raise newException(
-      ValueError, "Halo2IpaBn254.prepare: unsupported circuit id " & $circuitId
-    )
-  if k < Halo2IpaBn254MinK or k > Halo2IpaBn254MaxK:
+  ##
+  ## Supported circuits:
+  ## - `Halo2IpaBn254CircuitCubicV1` (id 1): `k` in `Halo2IpaBn254MinK..MaxK`.
+  ## - `Halo2IpaBn254CircuitPoseidon2Hash3V1` (id 2): 3-input Poseidon2 hash,
+  ##   `k` in `Halo2IpaBn254Poseidon2Hash3MinK..MaxK`.
+  let minK =
+    case circuitId
+    of Halo2IpaBn254CircuitCubicV1:
+      Halo2IpaBn254MinK
+    of Halo2IpaBn254CircuitPoseidon2Hash3V1:
+      Halo2IpaBn254Poseidon2Hash3MinK
+    else:
+      raise newException(
+        ValueError, "Halo2IpaBn254.prepare: unsupported circuit id " & $circuitId
+      )
+  if k < minK or k > Halo2IpaBn254MaxK:
     raise newException(
       ValueError,
-      "Halo2IpaBn254.prepare: k must be in " & $Halo2IpaBn254MinK & ".." &
-        $Halo2IpaBn254MaxK & ", got " & $k,
+      "Halo2IpaBn254.prepare: k must be in " & $minK & ".." &
+        $Halo2IpaBn254MaxK & " for circuit " & $circuitId & ", got " & $k,
     )
 
   # The C ABI writes the required lengths even when the output is null/short.
@@ -85,6 +96,11 @@ proc prepare*(
 
   result = (verifyingKey: verifyingKey, provingKey: provingKey)
 
+proc provingKeyCircuitId(provingKey: openArray[byte]): uint32 =
+  ## Reads the circuit id from the v1 PK header (magic | circuit_id u32 BE | ...).
+  for index in 8 ..< 12:
+    result = (result shl 8) or uint32(provingKey[index])
+
 proc prove*(
     T: type Halo2IpaBn254;
     provingKey: openArray[byte];
@@ -93,15 +109,36 @@ proc prove*(
 ): seq[byte] =
   ## Produces a proof with the OS CSPRNG for blinding.
   ##
-  ## `witness` is exactly 32 canonical big-endian BN254 `Fr` bytes and
+  ## The required witness length and instance shape come from the circuit id in
+  ## the proving key header:
+  ## - cubic (id 1): `witness` is exactly 32 canonical big-endian BN254 `Fr`
+  ##   bytes and the instances are one column with one value.
+  ## - Poseidon2 hash3 (id 2): `witness` is exactly 96 bytes (three canonical
+  ##   big-endian `Fr` values) and the instances are one column with four values
+  ##   `[digest, input0, input1, input2]`.
+  ##
   ## `expectedPublicInstances` must be the v1 instances blob produced by
-  ## `encodePublicInstances` for the same statement.
+  ## `encodePublicInstances` / `encodePoseidon2HashInstances` for the same
+  ## statement.
   if provingKey.len < Halo2IpaBn254PkHeaderLen or
       provingKey.len > Halo2IpaBn254MaxPkLen:
     raise newException(ValueError, "Halo2IpaBn254.prove: invalid proving key length")
-  if witness.len != Bn254FrLen:
+  let circuitId = provingKeyCircuitId(provingKey)
+  let witnessLen =
+    case circuitId
+    of Halo2IpaBn254CircuitCubicV1:
+      Bn254FrLen
+    of Halo2IpaBn254CircuitPoseidon2Hash3V1:
+      3 * Bn254FrLen
+    else:
+      raise newException(
+        ValueError, "Halo2IpaBn254.prove: unsupported circuit id " & $circuitId
+      )
+  if witness.len != witnessLen:
     raise newException(
-      ValueError, "Halo2IpaBn254.prove: witness must be exactly 32 bytes"
+      ValueError,
+      "Halo2IpaBn254.prove: witness must be exactly " & $witnessLen &
+        " bytes for circuit " & $circuitId,
     )
   if expectedPublicInstances.len < Halo2IpaBn254InstancesHeaderLen or
       expectedPublicInstances.len > Halo2IpaBn254MaxInstancesBlobLen:
@@ -159,10 +196,15 @@ proc verify*(
   ## Verifies a transparent Halo2 IPA/BN254 proof against the expected public
   ## instances. Returns `false` only for a structurally valid but invalid proof.
   ##
+  ## The circuit id is read from the verifying key header and selects the
+  ## instance shape: cubic (id 1) takes one column with one value; Poseidon2
+  ## hash3 (id 2) takes one column `[digest, input0, input1, input2]`.
+  ##
   ## The IPA params are regenerated deterministically from the `k` embedded in
-  ## the verifying key header. The verification path must not require caller
-  ## entropy, filesystem, clock, threads, or network; the wasm runtime smoke
-  ## enforces that contract by throwing on every host import.
+  ## the verifying key header (optionally cached per canister instance in the
+  ## Rust core). The verification path must not require caller entropy,
+  ## filesystem, clock, threads, or network; the wasm runtime smoke enforces
+  ## that contract by throwing on every host import.
   if verifyingKey.len < Halo2IpaBn254VkHeaderLen or
       verifyingKey.len > Halo2IpaBn254MaxVkLen:
     raise newException(ValueError, "Halo2IpaBn254.verify: invalid verifying key length")
@@ -256,3 +298,12 @@ proc encodePublicInstances*(values: openArray[Bn254Fr]): seq[byte] =
   appendU32Be(result, uint32(values.len))
   for value in values:
     result.add value
+
+proc encodePoseidon2HashInstances*(
+    inputs: array[3, Bn254Fr]; digest: Bn254Fr
+): seq[byte] =
+  ## Encodes the Poseidon2 hash3 (circuit id 2) public instance column
+  ## `[digest, inputs[0], inputs[1], inputs[2]]` in the v1 instances wire
+  ## format. Values must already be canonical big-endian `Fr` encodings;
+  ## non-canonical inputs raise `ValueError`.
+  encodePublicInstances([digest, inputs[0], inputs[1], inputs[2]])

@@ -34,6 +34,7 @@ mod poseidon;
 pub mod poseidon2;
 pub mod poseidon2_gadget;
 pub mod poseidon2_halo2;
+pub mod poseidon1_halo2;
 
 /// Helpers for producing deterministic test fixtures (not part of the C ABI).
 #[doc(hidden)]
