@@ -3,9 +3,9 @@
 #
 # Usage: ci/test_ic_branch85.sh [artifact-dir]
 #
-# The script fails on any assertion mismatch: fixture IPA proof verification,
-# tamper rejection, Poseidon2 KAT, bounded inputs, or WASM imports other than
-# `ic0`.
+# The script fails on any assertion mismatch: fixture IPA proof verification
+# (cubic id 1 and Poseidon2 hash3 id 2), tamper rejection, Poseidon2 KAT,
+# bounded inputs, or WASM imports other than `ic0`.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +28,8 @@ fi
 
 node "$repo_root/web/ic-branch85/extract-fixture.cjs" \
   "$repo_root/tests/fixtures/halo2_ipa_bn254_v1.hex" \
-  "$artifacts"
+  "$artifacts" \
+  "$repo_root/tests/fixtures/halo2_ipa_poseidon2_v1.hex"
 
 cd "$repo_root"
 HALO2_IPA_APPROVED_VK="$artifacts/vk.bin" \
@@ -37,13 +38,20 @@ HALO2_IPA_APPROVED_VK="$artifacts/vk.bin" \
     --manifest-path examples/halo2-ipa-ic-verifier/Cargo.toml \
     --target wasm32-unknown-unknown
 
+HALO2_IPA_APPROVED_VK="$artifacts/poseidon2_vk.bin" \
+  cargo build --locked --release \
+    --features halo2-ipa-verify-only,halo2-ipa-params-cache \
+    --manifest-path examples/halo2-ipa-poseidon2-ic-verifier/Cargo.toml \
+    --target wasm32-unknown-unknown
+
 cargo build --locked --release \
   --manifest-path examples/poseidon2-ic-hash/Cargo.toml \
   --target wasm32-unknown-unknown
 
 ipa_wasm="$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/halo2_ipa_ic_verifier.wasm"
+poseidon2_ipa_wasm="$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/halo2_ipa_poseidon2_ic_verifier.wasm"
 poseidon_wasm="$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/poseidon2_ic_hash.wasm"
-for wasm in "$ipa_wasm" "$poseidon_wasm"; do
+for wasm in "$ipa_wasm" "$poseidon2_ipa_wasm" "$poseidon_wasm"; do
   if [[ ! -f "$wasm" ]]; then
     echo "missing wasm: $wasm" >&2
     exit 1
@@ -51,7 +59,7 @@ for wasm in "$ipa_wasm" "$poseidon_wasm"; do
 done
 
 node "$repo_root/web/ic-branch85/ic-smoke.cjs" \
-  "$artifacts" "$ipa_wasm" "$poseidon_wasm"
+  "$artifacts" "$ipa_wasm" "$poseidon_wasm" "$poseidon2_ipa_wasm"
 
 node -e '
 const fs = require("node:fs");
@@ -59,13 +67,17 @@ const path = require("node:path");
 const [artifactDir] = process.argv.slice(1);
 const report = JSON.parse(fs.readFileSync(path.join(artifactDir, "ic-measurements.json"), "utf8"));
 const ipa = report.halo2IpaVerify;
+const ipa2 = report.halo2IpaPoseidon2Verify;
 const hash = report.poseidon2Hash;
+const formatImports = (wasm) => wasm.imports.map((i) => i.module + "." + i.name).join(", ");
 console.log("IC branch-85 measurements");
-console.log(`  halo2-ipa wasm: ${report.wasm.halo2Ipa.bytes} bytes, ${report.wasm.halo2Ipa.functions.total} functions, imports: ${report.wasm.halo2Ipa.imports.map((i) => i.module + "." + i.name).join(", ")}`);
-console.log(`  poseidon2 wasm: ${report.wasm.poseidon2.bytes} bytes, ${report.wasm.poseidon2.functions.total} functions, imports: ${report.wasm.poseidon2.imports.map((i) => i.module + "." + i.name).join(", ")}`);
-console.log(`  IPA verify: status ${ipa.status}, cold instructions ${ipa.coldInstructions}, warm instructions ${ipa.warmInstructions}, memory ${ipa.memoryBytes} bytes (${ipa.memoryPages} pages), warm memory ${ipa.warmMemoryBytes} bytes`);
-console.log(`  Poseidon2 [1,2,3]: status ${hash.status}, instructions ${hash.instructions}, memory ${hash.memoryBytes} bytes, digest ${hash.digest}`);
-console.log(`  tamper/rejection statuses: proof ${ipa.tamperedProofStatus}, instance ${ipa.tamperedInstancesStatus}, oversized ${ipa.oversizedDirectGuard.status}, bad-envelope ${ipa.badEnvelopeStatus}, bad-length ${hash.badLengthStatus}, non-canonical ${hash.nonCanonicalStatus}, >12 inputs ${hash.tooManyStatus}`);
+console.log(`  halo2-ipa wasm: ${report.wasm.halo2Ipa.bytes} bytes, ${report.wasm.halo2Ipa.functions.total} functions, imports: ${formatImports(report.wasm.halo2Ipa)}`);
+console.log(`  halo2-ipa-poseidon2 wasm: ${report.wasm.halo2IpaPoseidon2.bytes} bytes, ${report.wasm.halo2IpaPoseidon2.functions.total} functions, imports: ${formatImports(report.wasm.halo2IpaPoseidon2)}`);
+console.log(`  poseidon2-hash wasm: ${report.wasm.poseidon2.bytes} bytes, ${report.wasm.poseidon2.functions.total} functions, imports: ${formatImports(report.wasm.poseidon2)}`);
+console.log(`  cubic IPA verify: status ${ipa.status}, cold instructions ${ipa.coldInstructions}, warm instructions ${ipa.warmInstructions}, memory ${ipa.memoryBytes} bytes (${ipa.memoryPages} pages), warm memory ${ipa.warmMemoryBytes} bytes`);
+console.log(`  Poseidon2 IPA verify: status ${ipa2.status}, cold instructions ${ipa2.coldInstructions}, warm instructions ${ipa2.warmInstructions}, memory ${ipa2.memoryBytes} bytes (${ipa2.memoryPages} pages), warm memory ${ipa2.warmMemoryBytes} bytes`);
+console.log(`  Poseidon2 [1,2,3] hash: status ${hash.status}, instructions ${hash.instructions}, memory ${hash.memoryBytes} bytes, digest ${hash.digest}`);
+console.log(`  tamper/rejection statuses: cubic proof ${ipa.tamperedProofStatus}, cubic instance ${ipa.tamperedInstancesStatus}, poseidon2 proof ${ipa2.tamperedProofStatus}, poseidon2 instance ${ipa2.tamperedInstancesStatus}, oversized ${ipa.oversizedDirectGuard.status}/${ipa2.oversizedDirectGuard.status}, bad-envelope ${ipa.badEnvelopeStatus}, bad-length ${hash.badLengthStatus}, non-canonical ${hash.nonCanonicalStatus}, >12 inputs ${hash.tooManyStatus}`);
 ' "$artifacts"
 
 echo "Measurements: $artifacts/ic-measurements.json"

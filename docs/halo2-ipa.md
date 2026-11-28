@@ -32,12 +32,27 @@ Rust core: `rustcrypto-ffi/src/halo2_ipa.rs`
 ## 回路レジストリと VK ピン留め
 
 `VerifyingKey::read` / `ProvingKey::read` は具体的な `Circuit` 型を要求するため、
-本モジュールは `u32` の **承認済み回路レジストリ** を持つ。実装済みは次の 2 件。
+本モジュールは `u32` の **承認済み回路レジストリ** を持つ。実装済みは次の 3 系統。
 
 | `circuit_id` | 定数 | 回路 |
 |---:|---|---|
 | 1 | `HALO2_IPA_BN254_CIRCUIT_CUBIC_V1` | advice 1 列・instance 1 列・selector 1 個。ゲート `x^3 + x + 5 - y == 0`。witness `x`（32 バイト）、公開入力 `y`（1 列 1 値）。`4 <= k <= 16` |
-| 2 | `HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1` | `poseidon2_halo2.rs` の固定 3 入力 Poseidon2 hash。witness は 3 個の canonical BE `Fr`（96 バイト）、公開入力は 1 列 `[digest, input0, input1, input2]`（4 値）。`7 <= k <= 16` |
+| 2 | `HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH3_V1` | `poseidon2_halo2.rs` の固定 3 入力 Poseidon2 hash（互換用に維持）。witness は 3 個の canonical BE `Fr`（96 バイト）、公開入力は 1 列 `[digest, input0, input1, input2]`（4 値）。`7 <= k <= 16` |
+| `0x100 + n`（`n = 0..=12`） | `HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH_V1_BASE` | 同じ `Poseidon2HashCircuit` を **固定 `n` 入力** で登録した任意 arity 回路。witness は `n` 個の canonical BE `Fr`（`32 * n` バイト、`n = 0` は 0 バイト）、公開入力は 1 列 `n + 1` 値 `[digest, input0, .., input_{n-1}]`。最小 `k` は下記の行数規則で決まる |
+
+`circuit_id` の符号化:
+
+- `0x100 + 0` 〜 `0x100 + 12`（十進 `256`〜`268`）が任意 arity 回路。
+- 旧来の `2` は **3 入力固定** の別 id として残す（既存 fixture / API を変更しない）。
+- `poseidon2_arity(circuit_id)` は id `2` を `3`、`BASE + n` を `n`、それ以外を
+  `None` として返す。
+
+最小 `k` の規則（任意 arity）: `hash_circuit_rows(n)` は 1 permutation あたり
+65 行（`65 * permutations`、permutation 数は rate 3 の sponge framing で決まる）。
+Halo2 は blinding 用に `5 + 1 = 6` 行を予約するため、
+`2^k - 6 >= hash_circuit_rows(n)` を満たす最小の `k` を採用する。実際には
+arity `0..=3` は `k = 7`、`4..=9` は `k = 8`、`10..=12` は `k = 9` になる
+（Rust の `poseidon2_arity_min_k` と Nim の `poseidon2HashMinK` が同じ規則を計算する）。
 
 - 回路の追加は **Rust ソース変更 + レビュー** を必須とする。入力バイト列から
   任意の回路コードをロードすることはない。
@@ -75,27 +90,34 @@ int rustcrypto_halo2_ipa_bn254_instances_validate(const uint8_t *instances, size
 ```
 
 - `prepare`: `k` と `circuit_id` を検証し、決定的に params を導出して VK/PK を
-  keygen し、v1 形式で書き出す。乱数は使わない。`circuit_id = 2` は 65 行の
-  permutation レイアウトのため `k >= 7` を要求し、`k < 7` は
-  `INVALID_PARAMETER` で拒否する。keygen は登録済み arity（3 入力）の
-  `Poseidon2HashCircuit::new(&[0, 0, 0])` を使う（`Default` の 0 入力では
-  fixed 列が変わるため使わない）。
+  keygen し、v1 形式で書き出す。乱数は使わない。`circuit_id = 2` と任意 arity
+  (`BASE + n`) は 65 行の permutation レイアウトのため、それぞれ `k >= 7` と
+  `2^k - 6 >= hash_circuit_rows(n)` を要求し、不足する `k` は
+  `INVALID_PARAMETER` で拒否する。keygen は登録済み arity の
+  `Poseidon2HashCircuit::new(&vec![Fr::from(0); arity])` を使う
+  （`Default` の 0 入力では fixed 列が変わるため使わない）。`arity = 0` は
+  空 vector で keygen する。
 - `prove`: PK ヘッダの `circuit_id` を先に読み、回路ごとの witness 長
-  （id 1 は 32 バイト、id 2 は 96 バイト）と公開入力を検査する。
+  （id 1 は 32 バイト、id 2 は 96 バイト、`BASE + n` は `32 * n` バイト）と
+  公開入力を検査する。
   - id 1: `y == x^3 + x + 5`。
-  - id 2: witness の 3 入力が公開入力 `input0..2` と一致し、
+  - id 2 と `BASE + n`: witness の入力が公開入力 `input0..` と一致し、
     `digest == poseidon2_halo2::hash_output(&inputs)` であることを検査する。
+  - `n = 0` の witness は 0 バイトで、**NULL ポインタと長さ 0 を受け付ける**
+    （長さが非 0 なら拒否する）。
 
   公開入力と witness が食い違う場合は証明を生成せず `INVALID_PARAMETER`
   （形状不一致は `INVALID_PUBLIC_INPUT_COUNT`）を返す。証明は OS CSPRNG
   （`rand_core::OsRng`）で生成する。
 - `verify`: VK をレジストリ回路でパースし、`circuit_id` に対応する公開入力
-  形状（1 値または 4 値）を検査し、`k` から params を再生成（任意でキャッシュ）
-  し、proof transcript を **末尾バイトまで消費** したことを確認して
-  `SingleStrategy`（乱数を要求しない単一証明検証）で判定する。
+  形状（1 値、4 値、または `arity + 1` 値）を検査し、`k` から params を
+  再生成（任意でキャッシュ）し、proof transcript を **末尾バイトまで消費**
+  したことを確認して `SingleStrategy`（乱数を要求しない単一証明検証）で判定する。
 - `*_validate`: 安価な構造検証。VK/PK はレジストリ回路によるデコードまで行う。
   proof は v1 エンベロープ（magic・長さ・末尾バイト）を、instances は全要素の
-  canonical `Fr` と登録済み形状（1 列 1 値または 1 列 4 値）を検査する。
+  canonical `Fr` と単一列形状（1..=13 値 = arity `0..=12` の `arity + 1`）を
+  検査する。circuit id を受け取らないため、回路固有の値数一致は `verify` が
+  行う。
 
 ### Nim の想定 API（type-first）
 
@@ -107,7 +129,7 @@ let (vk, pk) = Halo2IpaBn254.prepare(Halo2IpaBn254CircuitCubicV1, 8)
 let instances = Halo2IpaBn254.encodePublicInstances([y])
 let proof = Halo2IpaBn254.prove(pk, witnessBytes, instances)
 
-# circuit 2: 3-input Poseidon2 hash (digest of inputs[0..2])
+# circuit 2: 3-input Poseidon2 hash (legacy, digest of inputs[0..2])
 let (vk2, pk2) = Halo2IpaBn254.prepare(
   Halo2IpaBn254CircuitPoseidon2Hash3V1, 8
 )
@@ -115,15 +137,23 @@ let instances2 = encodePoseidon2HashInstances([input0, input1, input2], digest)
 let witness3 = input0 & input1 & input2   # 96 bytes
 let proof2 = Halo2IpaBn254.prove(pk2, witness3, instances2)
 
-if Halo2IpaBn254.verify(vk2, proof2, instances2):
+# arbitrary arity 0..=12: circuit id = BASE + arity
+let (vk4, pk4) = Halo2IpaBn254.preparePoseidon2Hash(4, 8)  # min k = 8
+let instances4 = encodePoseidon2HashInstances(inputs4, digest4)
+let proof4 = Halo2IpaBn254.provePoseidon2Hash(pk4, inputs4, digest4)
+
+if Halo2IpaBn254.verify(vk4, proof4, instances4):
   echo "valid for this profile and key"
 ```
 
 `prepare` は `(verifyingKey, provingKey)`、`prove` は `seq[byte]`、
 `verify` は `bool` を返す想定。`prove` は PK ヘッダの circuit id から
-witness 長を決める（id 1 = 32 バイト、id 2 = 96 バイト）。
-`validateVerifyingKey` / `validateProvingKey` / `validateProof` /
-`validatePublicInstances` も同様に `bool` を返す。
+witness 長を決める（id 1 = 32 バイト、id 2 = 96 バイト、`BASE + n` =
+`32 * n` バイト）。`preparePoseidon2Hash` は `arity` と最小 `k` を検証し、
+`provePoseidon2Hash` は入力の連結を witness、`[digest, inputs...]` を公開入力
+として `prove` に渡す。`poseidon2HashCircuitId` / `poseidon2HashMinK` で
+id と最小 `k` を取得できる。`validateVerifyingKey` / `validateProvingKey` /
+`validateProof` / `validatePublicInstances` も同様に `bool` を返す。
 
 ### エラーステータス
 
@@ -153,7 +183,7 @@ witness 長を決める（id 1 = 32 バイト、id 2 = 96 バイト）。
 | Offset | Size | Field |
 |---|---:|---|
 | 0 | 8 | magic `"RCH2IPV1"` |
-| 8 | 4 | `circuit_id`（`1` = cubic v1、`2` = Poseidon2 hash3） |
+| 8 | 4 | `circuit_id`（`1` = cubic v1、`2` = Poseidon2 hash3、`0x100 + n` = 任意 arity Poseidon2 hash） |
 | 12 | 4 | `k`（4..=16） |
 | 16 | 4 | `vk_len`（1..=4 MiB） |
 | 20 | `vk_len` | `halo2_axiom` の `SerdeFormat::Processed` による VK |
@@ -201,17 +231,19 @@ PK は先頭に VK を含む。デコード前に内部の多項式長・ベク�
 - 登録回路の instance 形状のみを受け付ける:
   - id 1（cubic）: 1 列 1 値。
   - id 2（Poseidon2 hash3）: 1 列 4 値 `[digest, input0, input1, input2]`。
+  - `BASE + n`（任意 arity）: 1 列 `n + 1` 値
+    `[digest, input0, .., input_{n-1}]`（`n = 0` は digest のみ）。
 
   それ以外は `INVALID_PUBLIC_INPUT_COUNT`。ただし circuit id を受け取らない
-  `instances_validate` は、1 列 1 値または 1 列 4 値のいずれかであれば OK を
-  返す。
+  `instances_validate` は、単一列で 1..=13 値（arity `0..=12` の `arity + 1`
+  を包含）であれば OK を返し、回路固有の一致は `verify` が検査する。
 - `column_count == 0` は拒否する。
 
 ### サイズ・`k` の上限
 
 | 項目 | 上限 |
-|---|---:|
-| `k` | 4..=16（id 2 は 7..=16） |
+|---|---|
+| `k` | 4..=16（id 2 は 7..=16、`BASE + n` は `0..=3` で 7、`4..=9` で 8、`10..=12` で 9 以上） |
 | VK ペイロード | 4 MiB |
 | PK ペイロード | 64 MiB |
 | proof transcript | 4 MiB |
@@ -247,16 +279,31 @@ cargo run --example halo2_ipa_fixture [output.hex]
 cargo run --locked --release --example halo2_ipa_poseidon2_fixture [output.hex]
 ```
 
-`cargo test --lib halo2_ipa` は次を確認する（15 テスト）:
+第 2 引数に arity（`0..=12`）を渡すと任意 arity 回路（`BASE + arity`）を
+最小 `k` で生成する。arity 12 の committed fixture は
+`tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex`（`circuit_id = 268`、
+`k = 9`、入力 `1..=12`、witness 384 バイト、instance 13 値）。
+
+```text
+cargo run --locked --release --example halo2_ipa_poseidon2_fixture \
+  ../tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex 12
+```
+
+`cargo test --lib halo2_ipa` は次を確認する（19 テスト）:
 
 - `prepare` / `prove` / `verify` の k=8 ラウンドトリップ（cubic と Poseidon2）。
-- 両 committed fixture を C ABI 経由で検証（正常系・繰り返し呼び出し）。
+- 両 committed fixture（cubic / id 2）を C ABI 経由で検証（正常系・繰り返し呼び出し）。
+- 任意 arity `0, 1, 2, 3, 4, 6, 8, 9, 12` の最小 `k` での
+  prepare / prove / verify、誤 digest の拒否、witness と公開入力の不一致の
+  拒否、arity 0 の空 witness（NULL ポインタ）受理。
+- `poseidon2_arity` / `poseidon2_arity_min_k` の id 符号化と最小 `k` 規則、
+  `BASE + 13` の拒否。
 - 公開入力の改ざん → `VERIFICATION_FAILED`。
 - proof バイト改ざん → 非 OK（panic しない）。
 - VK/PK/instances の切り詰め・末尾バイト・内部長の巨大化 → 具体的エラー。
 - 非 canonical `Fr`、列数・値数の不一致、circuit 2 の 1 値/2 値/32 バイト
   witness の拒否。
-- circuit 2 の `k < 7` → `INVALID_PARAMETER`。
+- circuit 2 の `k < 7`、任意 arity の最小 `k` 未満 → `INVALID_PARAMETER`。
 - 不正 magic、未知 `circuit_id`、`k<4` / `k>16`、KZG magic の相互拒否。
 - 空入力、NULL 入力、NULL 出力、短い出力バッファ。
 
@@ -340,16 +387,19 @@ WASM の命令数・cycle・peak memory は未計測。
 
 ## 未対応（明示）
 
-- **Poseidon2 hash3 は circuit id 2 として登録済み**（witness 96 バイト、公開
-  入力 `[digest, input0, input1, input2]`、`k >= 7`）。Nim からも
-  `Halo2IpaBn254CircuitPoseidon2Hash3V1` と `encodePoseidon2HashInstances` で
-  利用できる。ただし **arity は 3 固定** であり、0/1/2/4/6/8/9/12 入力の
-  Poseidon2 sponge や Poseidon1 gate はまだ circuit id を持たない。詳細は
+- **Poseidon2 hash は circuit id 2（3 入力固定、互換用）と任意 arity
+  `BASE + 0..=12` の両方が登録済み**。id 2 は witness 96 バイト、公開入力
+  `[digest, input0, input1, input2]`、`k >= 7`。任意 arity は witness
+  `32 * n` バイト、公開入力 `[digest, inputs...]`、最小 `k` は行数規則で
+  7/8/9。Nim からは `Halo2IpaBn254CircuitPoseidon2Hash3V1` /
+  `Halo2IpaBn254CircuitPoseidon2HashV1Base`、`preparePoseidon2Hash` /
+  `provePoseidon2Hash` / `encodePoseidon2HashInstances` で利用できる。
+  Poseidon1 gate はまだ circuit id を持たない。詳細は
   [`poseidon2-halo2-gate.md`](poseidon2-halo2-gate.md)。
 - 任意の回路記述子 / Noir フロントエンド。回路は Rust のレジストリに
   コンパイル時登録されたものだけ。
 - 一般的な R1CS フロントエンドとしての利用。本モジュールは小さなデモ回路
-  （cubic v1 と Poseidon2 hash3）専用である。
+  （cubic v1 と Poseidon2 hash）専用である。
 - Poseidon2 hash 回路自体の **wasm32-wasip1** 実行は完了
   （[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）。browser Worker /
   ICP 上での Poseidon2 witness 生成・prove は未実装（canister の proof 検証は

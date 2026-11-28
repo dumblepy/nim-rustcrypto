@@ -3,9 +3,12 @@ import unittest
 import ../../src/rustcrypto/algorithm/ffi
 import ../../src/rustcrypto/algorithm/halo2_ipa
 import ../../src/rustcrypto/algorithm/bn254
+import ../../src/rustcrypto/algorithm/poseidon2
 
 const Fixture = staticRead("../fixtures/halo2_ipa_bn254_v1.hex")
 const Poseidon2Fixture = staticRead("../fixtures/halo2_ipa_poseidon2_v1.hex")
+const Poseidon2Arity12Fixture =
+  staticRead("../fixtures/halo2_ipa_poseidon2_arity12_v1.hex")
 
 const
   ## v1 instances envelope: magic (8) + column_count u32 (4).
@@ -48,6 +51,10 @@ let
   Poseidon2Proof = fixtureValue(Poseidon2Fixture, "PROOF")
   Poseidon2Instances = fixtureValue(Poseidon2Fixture, "INSTANCES")
   Poseidon2Witness = fixtureValue(Poseidon2Fixture, "WITNESS")
+  Poseidon2Arity12Vk = fixtureValue(Poseidon2Arity12Fixture, "VK")
+  Poseidon2Arity12Proof = fixtureValue(Poseidon2Arity12Fixture, "PROOF")
+  Poseidon2Arity12Instances = fixtureValue(Poseidon2Arity12Fixture, "INSTANCES")
+  Poseidon2Arity12Witness = fixtureValue(Poseidon2Arity12Fixture, "WITNESS")
 
 proc poseidon2Witness(
     inputs: array[3, Bn254Fr]
@@ -71,6 +78,19 @@ proc rejected(
     result = not Halo2IpaBn254.verify(verifyingKey, proof, publicInstances)
   except ValueError:
     result = true
+
+proc frFromU64(value: uint64): Bn254Fr =
+  ## Encodes a small integer as canonical big-endian BN254 `Fr`.
+  var remaining = value
+  for index in countdown(Bn254FrLen - 1, 0):
+    result[index] = byte(remaining and 0xFF'u64)
+    remaining = remaining shr 8
+
+proc poseidon2ArityInputs(arity: int): seq[Bn254Fr] =
+  ## Inputs `1, .., arity` for the arbitrary-arity Poseidon2 hash tests.
+  result = newSeq[Bn254Fr](arity)
+  for index in 0 ..< arity:
+    result[index] = frFromU64(uint64(index + 1))
 
 suite "halo2 ipa bn254 (transparent, no trusted setup)":
   test "fixture encodings are valid and the proof verifies":
@@ -314,3 +334,115 @@ suite "halo2 ipa bn254 (transparent, no trusted setup)":
       discard Halo2IpaBn254.prove(
         provingPk, fromHexFr(FrOneHex), instances
       )
+
+  test "arbitrary arity circuit ids and minimum k":
+    check Halo2IpaBn254CircuitPoseidon2HashV1Base == 0x100'u32
+    check poseidon2HashCircuitId(0) == 0x100'u32
+    check poseidon2HashCircuitId(3) == 0x103'u32
+    check poseidon2HashCircuitId(12) == 0x10C'u32
+    expect ValueError:
+      discard poseidon2HashCircuitId(-1)
+    expect ValueError:
+      discard poseidon2HashCircuitId(13)
+
+    for arity in 0 .. 3:
+      check poseidon2HashMinK(arity) == 7'u32
+    for arity in 4 .. 9:
+      check poseidon2HashMinK(arity) == 8'u32
+    for arity in 10 .. 12:
+      check poseidon2HashMinK(arity) == 9'u32
+    expect ValueError:
+      discard poseidon2HashMinK(13)
+
+  test "encodePoseidon2HashInstances accepts 0..12 inputs":
+    let digest = fromHexFr(Poseidon2DigestHex)
+    for arity in 0 .. 12:
+      let inputs = poseidon2ArityInputs(arity)
+      let encoded = encodePoseidon2HashInstances(inputs, digest)
+      check encoded.len ==
+        IpaInstancesHeaderLen + IpaInstanceValueCountLen +
+          (arity + 1) * Bn254FrLen
+      check Halo2IpaBn254.validatePublicInstances(encoded)
+
+    var tooMany = newSeq[Bn254Fr](13)
+    for index in 0 ..< tooMany.len:
+      tooMany[index] = fromHexFr(FrOneHex)
+    expect ValueError:
+      discard encodePoseidon2HashInstances(tooMany, digest)
+
+  test "arbitrary arity 12 fixture verifies":
+    check Poseidon2Arity12Witness.len == 12 * Bn254FrLen
+    check Halo2IpaBn254.validateVerifyingKey(Poseidon2Arity12Vk)
+    check Halo2IpaBn254.validateProof(Poseidon2Arity12Proof)
+    check Halo2IpaBn254.validatePublicInstances(Poseidon2Arity12Instances)
+    check Halo2IpaBn254.verify(
+      Poseidon2Arity12Vk, Poseidon2Arity12Proof, Poseidon2Arity12Instances
+    )
+
+    var circuitId: uint32
+    for index in 8 ..< 12:
+      circuitId = (circuitId shl 8) or uint32(Poseidon2Arity12Vk[index])
+    check circuitId == poseidon2HashCircuitId(12)
+
+    var expectedWitness: seq[byte]
+    for input in poseidon2ArityInputs(12):
+      expectedWitness.add input
+    check expectedWitness == Poseidon2Arity12Witness
+
+    # The legacy id-2 fixture remains the 3-input circuit.
+    var legacyCircuitId: uint32
+    for index in 8 ..< 12:
+      legacyCircuitId =
+        (legacyCircuitId shl 8) or uint32(Poseidon2Vk[index])
+    check legacyCircuitId == Halo2IpaBn254CircuitPoseidon2Hash3V1
+
+  test "arbitrary arity prepare/prove/verify roundtrip":
+    for arity in [0, 2, 4, 9, 12]:
+      let minK = poseidon2HashMinK(arity)
+      let (verifyingKey, provingKey) =
+        Halo2IpaBn254.preparePoseidon2Hash(arity, minK)
+      check Halo2IpaBn254.validateVerifyingKey(verifyingKey)
+      check Halo2IpaBn254.validateProvingKey(provingKey)
+
+      # The circuit id encodes the arity and is not the legacy id 2.
+      var encodedCircuitId: uint32
+      for index in 8 ..< 12:
+        encodedCircuitId =
+          (encodedCircuitId shl 8) or uint32(verifyingKey[index])
+      check encodedCircuitId == poseidon2HashCircuitId(arity)
+
+      let inputs = poseidon2ArityInputs(arity)
+      let digest = Poseidon2Bn254.hash(inputs)
+      let instances = encodePoseidon2HashInstances(inputs, digest)
+      check Halo2IpaBn254.validatePublicInstances(instances)
+      let proof = Halo2IpaBn254.provePoseidon2Hash(
+        provingKey, inputs, digest
+      )
+      check Halo2IpaBn254.validateProof(proof)
+      check Halo2IpaBn254.verify(verifyingKey, proof, instances)
+
+      # A wrong digest is structurally valid but does not verify.
+      let digestLast = IpaInstancesHeaderLen + IpaInstanceValueCountLen +
+        Bn254FrLen - 1
+      var wrongInstances = instances
+      wrongInstances[digestLast] = wrongInstances[digestLast] xor 1
+      check Halo2IpaBn254.validatePublicInstances(wrongInstances)
+      check not Halo2IpaBn254.verify(
+        verifyingKey, proof, wrongInstances
+      )
+
+      # A wrong digest is also rejected before proving.
+      var wrongDigest = digest
+      wrongDigest[^1] = wrongDigest[^1] xor 1
+      expect ValueError:
+        discard Halo2IpaBn254.provePoseidon2Hash(
+          provingKey, inputs, wrongDigest
+        )
+
+      # `k` below the computed minimum is rejected.
+      expect ValueError:
+        discard Halo2IpaBn254.preparePoseidon2Hash(arity, minK - 1)
+      expect ValueError:
+        discard Halo2IpaBn254.preparePoseidon2Hash(arity, 17'u32)
+      expect ValueError:
+        discard Halo2IpaBn254.preparePoseidon2Hash(13, 9'u32)

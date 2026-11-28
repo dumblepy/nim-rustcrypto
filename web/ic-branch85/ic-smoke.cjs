@@ -1,7 +1,8 @@
 // PocketIC smoke + measurement for the branch-85 ICP canisters.
 //
 // Usage:
-//   node ic-smoke.cjs <artifact-dir> <halo2-ipa.wasm> <poseidon2.wasm>
+//   node ic-smoke.cjs <artifact-dir> <halo2-ipa.wasm> <poseidon2-hash.wasm> \
+//     <halo2-ipa-poseidon2.wasm>
 //
 // `@dfinity/pic` is reused from `web/groth16-prover/node_modules` (which also
 // bundles the PocketIC server binary) so this directory needs no own install.
@@ -16,10 +17,11 @@ const picRequire = createRequire(
 const { PocketIc, PocketIcServer } = picRequire('@dfinity/pic');
 const picVersion = picRequire('@dfinity/pic/package.json').version;
 
-const [artifactDir, ipaWasmPath, poseidonWasmPath] = process.argv.slice(2);
-if (!artifactDir || !ipaWasmPath || !poseidonWasmPath) {
+const [artifactDir, ipaWasmPath, poseidonWasmPath, poseidon2IpaWasmPath] =
+  process.argv.slice(2);
+if (!artifactDir || !ipaWasmPath || !poseidonWasmPath || !poseidon2IpaWasmPath) {
   console.error(
-    'usage: node ic-smoke.cjs <artifact-dir> <halo2-ipa.wasm> <poseidon2.wasm>',
+    'usage: node ic-smoke.cjs <artifact-dir> <halo2-ipa.wasm> <poseidon2-hash.wasm> <halo2-ipa-poseidon2.wasm>',
   );
   process.exit(2);
 }
@@ -161,8 +163,21 @@ function directGuardCheck(wasmPath, exportName, argSize) {
   const approvedVk = read('vk.bin');
   assert.equal(approvedVk.length, 126, 'fixture VK length');
 
+  // Circuit id 2 (3-input Poseidon2 hash) fixture.
+  const poseidon2Proof = read('poseidon2_proof.bin');
+  const poseidon2Instances = read('poseidon2_instances.bin');
+  const poseidon2ApprovedVk = read('poseidon2_vk.bin');
+  assert.equal(poseidon2ApprovedVk.length, 1214, 'Poseidon2 fixture VK length');
+  assert.equal(poseidon2Instances.length, 8 + 4 + 4 + 4 * 32, 'Poseidon2 instances length');
+  assert.equal(
+    poseidon2Instances.subarray(16, 48).toString('hex'),
+    EXPECTED_POSEIDON2_123,
+    'Poseidon2 instances digest KAT',
+  );
+
   const ipa = inspectWasm(ipaWasmPath);
   const poseidon2 = inspectWasm(poseidonWasmPath);
+  const poseidon2Ipa = inspectWasm(poseidon2IpaWasmPath);
 
   const server = await PocketIcServer.start();
   let pic;
@@ -170,12 +185,18 @@ function directGuardCheck(wasmPath, exportName, argSize) {
     pic = await PocketIc.create(server.getUrl());
     const ipaCanister = await pic.createCanister();
     const poseidonCanister = await pic.createCanister();
+    const poseidon2IpaCanister = await pic.createCanister();
     await pic.addCycles(ipaCanister, 2_000_000_000_000n);
     await pic.addCycles(poseidonCanister, 2_000_000_000_000n);
+    await pic.addCycles(poseidon2IpaCanister, 2_000_000_000_000n);
     await pic.installCode({ canisterId: ipaCanister, wasm: fs.readFileSync(ipaWasmPath) });
     await pic.installCode({
       canisterId: poseidonCanister,
       wasm: fs.readFileSync(poseidonWasmPath),
+    });
+    await pic.installCode({
+      canisterId: poseidon2IpaCanister,
+      wasm: fs.readFileSync(poseidon2IpaWasmPath),
     });
 
     // --- Halo2 IPA verify ------------------------------------------------
@@ -280,6 +301,105 @@ function directGuardCheck(wasmPath, exportName, argSize) {
     const badEnvelopeStatus = badEnvelopeReply.readInt32LE(0);
     assert.notEqual(badEnvelopeStatus, 0, 'impossible proof length must be rejected');
 
+    // --- Halo2 IPA verify (circuit 2: 3-input Poseidon2 hash) ------------
+    const poseidon2VerifyArg = Buffer.concat([poseidon2Proof, poseidon2Instances]);
+    const poseidon2CyclesBefore = await pic.getCyclesBalance(poseidon2IpaCanister);
+    const poseidon2ColdReply = Buffer.from(
+      await pic.updateCall({
+        canisterId: poseidon2IpaCanister,
+        method: 'verify',
+        arg: poseidon2VerifyArg,
+      }),
+    );
+    const poseidon2CyclesAfter = await pic.getCyclesBalance(poseidon2IpaCanister);
+    assert.equal(poseidon2ColdReply.length, 16, 'Poseidon2 IPA reply length');
+    const poseidon2ColdStatus = poseidon2ColdReply.readInt32LE(0);
+    const poseidon2ColdInstructions = poseidon2ColdReply.readBigUInt64LE(4);
+    const poseidon2ColdPages = poseidon2ColdReply.readUInt32LE(12);
+    assert.equal(poseidon2ColdStatus, 0, 'Poseidon2 fixture proof must verify');
+    assert(
+      poseidon2ColdInstructions < MAX_IPA_INSTRUCTIONS,
+      `Poseidon2 verifier instruction budget (${poseidon2ColdInstructions})`,
+    );
+    assert(
+      poseidon2ColdPages * 65536 < MAX_IPA_MEMORY_BYTES,
+      `Poseidon2 verifier memory budget (${poseidon2ColdPages} pages)`,
+    );
+
+    const poseidon2WarmReply = Buffer.from(
+      await pic.updateCall({
+        canisterId: poseidon2IpaCanister,
+        method: 'verify',
+        arg: poseidon2VerifyArg,
+      }),
+    );
+    assert.equal(poseidon2WarmReply.length, 16, 'Poseidon2 IPA warm reply length');
+    const poseidon2WarmStatus = poseidon2WarmReply.readInt32LE(0);
+    const poseidon2WarmInstructions = poseidon2WarmReply.readBigUInt64LE(4);
+    const poseidon2WarmPages = poseidon2WarmReply.readUInt32LE(12);
+    assert.equal(poseidon2WarmStatus, 0, 'warm Poseidon2 proof must verify');
+    assert(
+      poseidon2WarmInstructions < MAX_IPA_INSTRUCTIONS,
+      `Poseidon2 warm verifier instruction budget (${poseidon2WarmInstructions})`,
+    );
+    assert(
+      poseidon2WarmPages * 65536 < MAX_IPA_MEMORY_BYTES,
+      `Poseidon2 warm verifier memory budget (${poseidon2WarmPages} pages)`,
+    );
+    assert(
+      poseidon2WarmInstructions <= poseidon2ColdInstructions,
+      `Poseidon2 warm call (${poseidon2WarmInstructions}) should not exceed cold (${poseidon2ColdInstructions})`,
+    );
+
+    const poseidon2TamperedProof = Buffer.from(poseidon2VerifyArg);
+    poseidon2TamperedProof[poseidon2Proof.length - 1] ^= 1;
+    const poseidon2TamperedProofReply = Buffer.from(
+      await pic.updateCall({
+        canisterId: poseidon2IpaCanister,
+        method: 'verify',
+        arg: poseidon2TamperedProof,
+      }),
+    );
+    const poseidon2TamperedProofStatus = poseidon2TamperedProofReply.readInt32LE(0);
+    assert.notEqual(
+      poseidon2TamperedProofStatus,
+      0,
+      'tampered Poseidon2 proof must be rejected',
+    );
+
+    const poseidon2TamperedInstances = Buffer.from(poseidon2VerifyArg);
+    poseidon2TamperedInstances[poseidon2VerifyArg.length - 1] ^= 1;
+    const poseidon2TamperedInstancesReply = Buffer.from(
+      await pic.updateCall({
+        canisterId: poseidon2IpaCanister,
+        method: 'verify',
+        arg: poseidon2TamperedInstances,
+      }),
+    );
+    const poseidon2TamperedInstancesStatus =
+      poseidon2TamperedInstancesReply.readInt32LE(0);
+    assert.notEqual(
+      poseidon2TamperedInstancesStatus,
+      0,
+      'tampered Poseidon2 instance must be rejected',
+    );
+
+    const poseidon2OversizedStatus = directGuardCheck(
+      poseidon2IpaWasmPath,
+      'canister_update verify',
+      oversized.length,
+    );
+    assert.notEqual(
+      poseidon2OversizedStatus.status,
+      0,
+      'oversized Poseidon2 argument must be rejected',
+    );
+    assert.equal(
+      poseidon2OversizedStatus.copied,
+      false,
+      'oversized Poseidon2 argument must be rejected before msg_arg_data_copy',
+    );
+
     // --- Poseidon2 hash --------------------------------------------------
     const frBe = (value) => {
       const out = Buffer.alloc(32);
@@ -355,8 +475,15 @@ function directGuardCheck(wasmPath, exportName, argSize) {
         instancesBytes: instances.length,
         vkSha256: sha256(approvedVk),
         proofSha256: sha256(proof),
+        poseidon2: {
+          vkBytes: poseidon2ApprovedVk.length,
+          proofBytes: poseidon2Proof.length,
+          instancesBytes: poseidon2Instances.length,
+          vkSha256: sha256(poseidon2ApprovedVk),
+          proofSha256: sha256(poseidon2Proof),
+        },
       },
-      wasm: { halo2Ipa: ipa, poseidon2 },
+      wasm: { halo2Ipa: ipa, poseidon2, halo2IpaPoseidon2: poseidon2Ipa },
       halo2IpaVerify: {
         status: verifyStatus,
         coldInstructions: coldInstructions.toString(),
@@ -375,6 +502,23 @@ function directGuardCheck(wasmPath, exportName, argSize) {
         oversizedDirectGuard: oversizedStatus,
         badEnvelopeStatus,
       },
+      halo2IpaPoseidon2Verify: {
+        status: poseidon2ColdStatus,
+        coldInstructions: poseidon2ColdInstructions.toString(),
+        warmInstructions: poseidon2WarmInstructions.toString(),
+        warmStatus: poseidon2WarmStatus,
+        memoryPages: poseidon2ColdPages,
+        memoryBytes: poseidon2ColdPages * 65536,
+        warmMemoryPages: poseidon2WarmPages,
+        warmMemoryBytes: poseidon2WarmPages * 65536,
+        updateCyclesDebited: (
+          poseidon2CyclesBefore - poseidon2CyclesAfter
+        ).toString(),
+        argBytes: poseidon2VerifyArg.length,
+        tamperedProofStatus: poseidon2TamperedProofStatus,
+        tamperedInstancesStatus: poseidon2TamperedInstancesStatus,
+        oversizedDirectGuard: poseidon2OversizedStatus,
+      },
       poseidon2Hash: {
         status: hashStatus,
         instructions: hashInstructions.toString(),
@@ -391,6 +535,10 @@ function directGuardCheck(wasmPath, exportName, argSize) {
       },
       budgets: {
         halo2Ipa: {
+          maxInstructions: MAX_IPA_INSTRUCTIONS.toString(),
+          maxMemoryBytes: MAX_IPA_MEMORY_BYTES,
+        },
+        halo2IpaPoseidon2: {
           maxInstructions: MAX_IPA_INSTRUCTIONS.toString(),
           maxMemoryBytes: MAX_IPA_MEMORY_BYTES,
         },

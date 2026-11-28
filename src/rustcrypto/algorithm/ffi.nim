@@ -130,6 +130,7 @@ const
   Poseidon2Bn254MaxInputs* = 12
   Halo2IpaBn254CircuitCubicV1* = 1'u32
   Halo2IpaBn254CircuitPoseidon2Hash3V1* = 2'u32
+  Halo2IpaBn254CircuitPoseidon2HashV1Base* = 0x100'u32
   Halo2IpaBn254MinK* = 4'u32
   Halo2IpaBn254Poseidon2Hash3MinK* = 7'u32
   Halo2IpaBn254MaxK* = 16'u32

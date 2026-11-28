@@ -13,9 +13,58 @@ const
     Halo2IpaBn254InstancesHeaderLen +
     Halo2IpaBn254MaxInstanceColumns * 4 +
     Halo2IpaBn254MaxInstanceValues * Bn254FrLen
+  ## Arbitrary-arity Poseidon2 hash family (circuit ids BASE + 0..=12).
+  Halo2IpaBn254Poseidon2MaxArity = 12
+  Halo2IpaBn254Poseidon2Rate = 3
+  ## Rows occupied by one Poseidon2 permutation (64 rounds + initial state).
+  Halo2IpaBn254Poseidon2PermutationRows = 65
+  ## Rows reserved by halo2 for blinding (`blinding_factors + 1`).
+  Halo2IpaBn254Poseidon2ReservedRows = 6
 
 type
   Halo2IpaBn254* = object
+
+proc poseidon2HashCircuitId*(arity: int): uint32 =
+  ## Returns the registered circuit id for a fixed `arity`-input Poseidon2 hash:
+  ## `Halo2IpaBn254CircuitPoseidon2HashV1Base + arity`.
+  ##
+  ## `arity` must be in `0..=12`; anything else
+  ## raises `ValueError`. Circuit id 2 remains the legacy 3-input circuit and is
+  ## not part of this range.
+  if arity < 0 or arity > Halo2IpaBn254Poseidon2MaxArity:
+    raise newException(
+      ValueError,
+      "Halo2IpaBn254.poseidon2HashCircuitId: arity must be in 0.." &
+        $Halo2IpaBn254Poseidon2MaxArity & ", got " & $arity,
+    )
+  Halo2IpaBn254CircuitPoseidon2HashV1Base + uint32(arity)
+
+proc poseidon2HashMinK*(arity: int): uint32 =
+  ## Minimum `k` for the fixed `arity`-input Poseidon2 hash circuit.
+  ##
+  ## Halo2 reserves `blinding_factors + 1 = 6` rows, so the minimum is the
+  ## smallest `k` with `2^k - 6 >= hash_circuit_rows(arity)`, where one
+  ## permutation occupies 65 rows. This yields `7` for arity `0..=3`, `8` for
+  ## `4..=9`, and `9` for `10..=12`.
+  if arity < 0 or arity > Halo2IpaBn254Poseidon2MaxArity:
+    raise newException(
+      ValueError,
+      "Halo2IpaBn254.poseidon2HashMinK: arity must be in 0.." &
+        $Halo2IpaBn254Poseidon2MaxArity & ", got " & $arity,
+    )
+  let permutations =
+    if arity == 0 or arity mod Halo2IpaBn254Poseidon2Rate != 0:
+      arity div Halo2IpaBn254Poseidon2Rate + 1
+    else:
+      arity div Halo2IpaBn254Poseidon2Rate
+  let rows = permutations * Halo2IpaBn254Poseidon2PermutationRows
+  for k in int(Halo2IpaBn254MinK) .. int(Halo2IpaBn254MaxK):
+    if (1 shl k) - Halo2IpaBn254Poseidon2ReservedRows >= rows:
+      return uint32(k)
+  raise newException(
+    ValueError,
+    "Halo2IpaBn254.poseidon2HashMinK: no supported k for arity " & $arity,
+  )
 
 proc appendU32Be(output: var seq[byte]; value: uint32) =
   output.add byte((value shr 24) and 0xFF'u32)
@@ -34,12 +83,20 @@ proc prepare*(
   ## - `Halo2IpaBn254CircuitCubicV1` (id 1): `k` in `Halo2IpaBn254MinK..MaxK`.
   ## - `Halo2IpaBn254CircuitPoseidon2Hash3V1` (id 2): 3-input Poseidon2 hash,
   ##   `k` in `Halo2IpaBn254Poseidon2Hash3MinK..MaxK`.
+  ## - `Halo2IpaBn254CircuitPoseidon2HashV1Base + arity` (arity 0..=12):
+  ##   fixed `arity`-input Poseidon2 hash, `k` at least `poseidon2HashMinK`.
   let minK =
-    case circuitId
-    of Halo2IpaBn254CircuitCubicV1:
+    if circuitId == Halo2IpaBn254CircuitCubicV1:
       Halo2IpaBn254MinK
-    of Halo2IpaBn254CircuitPoseidon2Hash3V1:
+    elif circuitId == Halo2IpaBn254CircuitPoseidon2Hash3V1:
       Halo2IpaBn254Poseidon2Hash3MinK
+    elif circuitId >= Halo2IpaBn254CircuitPoseidon2HashV1Base and
+        circuitId <=
+          Halo2IpaBn254CircuitPoseidon2HashV1Base +
+            uint32(Halo2IpaBn254Poseidon2MaxArity):
+      poseidon2HashMinK(
+        int(circuitId - Halo2IpaBn254CircuitPoseidon2HashV1Base)
+      )
     else:
       raise newException(
         ValueError, "Halo2IpaBn254.prepare: unsupported circuit id " & $circuitId
@@ -96,6 +153,24 @@ proc prepare*(
 
   result = (verifyingKey: verifyingKey, provingKey: provingKey)
 
+proc preparePoseidon2Hash*(
+    T: type Halo2IpaBn254; arity: int; k: uint32
+): tuple[verifyingKey: seq[byte], provingKey: seq[byte]] =
+  ## Prepares the VK/PK for the fixed `arity`-input Poseidon2 hash circuit.
+  ##
+  ## `arity` must be in `0..=12` (12) and `k` at
+  ## least `poseidon2HashMinK(arity)`. This is the arbitrary-arity API; circuit
+  ## id `2` remains the legacy 3-input circuit available through `prepare`.
+  let circuitId = poseidon2HashCircuitId(arity)
+  let minK = poseidon2HashMinK(arity)
+  if k < minK or k > Halo2IpaBn254MaxK:
+    raise newException(
+      ValueError,
+      "Halo2IpaBn254.preparePoseidon2Hash: k must be in " & $minK & ".." &
+        $Halo2IpaBn254MaxK & " for arity " & $arity & ", got " & $k,
+    )
+  prepare(Halo2IpaBn254, circuitId, k)
+
 proc provingKeyCircuitId(provingKey: openArray[byte]): uint32 =
   ## Reads the circuit id from the v1 PK header (magic | circuit_id u32 BE | ...).
   for index in 8 ..< 12:
@@ -116,6 +191,9 @@ proc prove*(
   ## - Poseidon2 hash3 (id 2): `witness` is exactly 96 bytes (three canonical
   ##   big-endian `Fr` values) and the instances are one column with four values
   ##   `[digest, input0, input1, input2]`.
+  ## - Poseidon2 arbitrary arity (`BASE + n`, `n` in `0..=12`): `witness` is
+  ##   exactly `32 * n` bytes (empty for `n = 0`) and the instances are one
+  ##   column with `n + 1` values `[digest, input0, .., input{n-1}]`.
   ##
   ## `expectedPublicInstances` must be the v1 instances blob produced by
   ## `encodePublicInstances` / `encodePoseidon2HashInstances` for the same
@@ -125,11 +203,15 @@ proc prove*(
     raise newException(ValueError, "Halo2IpaBn254.prove: invalid proving key length")
   let circuitId = provingKeyCircuitId(provingKey)
   let witnessLen =
-    case circuitId
-    of Halo2IpaBn254CircuitCubicV1:
+    if circuitId == Halo2IpaBn254CircuitCubicV1:
       Bn254FrLen
-    of Halo2IpaBn254CircuitPoseidon2Hash3V1:
+    elif circuitId == Halo2IpaBn254CircuitPoseidon2Hash3V1:
       3 * Bn254FrLen
+    elif circuitId >= Halo2IpaBn254CircuitPoseidon2HashV1Base and
+        circuitId <=
+          Halo2IpaBn254CircuitPoseidon2HashV1Base +
+            uint32(Halo2IpaBn254Poseidon2MaxArity):
+      int(circuitId - Halo2IpaBn254CircuitPoseidon2HashV1Base) * Bn254FrLen
     else:
       raise newException(
         ValueError, "Halo2IpaBn254.prove: unsupported circuit id " & $circuitId
@@ -198,7 +280,9 @@ proc verify*(
   ##
   ## The circuit id is read from the verifying key header and selects the
   ## instance shape: cubic (id 1) takes one column with one value; Poseidon2
-  ## hash3 (id 2) takes one column `[digest, input0, input1, input2]`.
+  ## hash3 (id 2) takes one column `[digest, input0, input1, input2]`; the
+  ## arbitrary-arity Poseidon2 family (`BASE + n`) takes one column with
+  ## `n + 1` values.
   ##
   ## The IPA params are regenerated deterministically from the `k` embedded in
   ## the verifying key header (optionally cached per canister instance in the
@@ -300,10 +384,50 @@ proc encodePublicInstances*(values: openArray[Bn254Fr]): seq[byte] =
     result.add value
 
 proc encodePoseidon2HashInstances*(
-    inputs: array[3, Bn254Fr]; digest: Bn254Fr
+    inputs: openArray[Bn254Fr]; digest: Bn254Fr
 ): seq[byte] =
-  ## Encodes the Poseidon2 hash3 (circuit id 2) public instance column
-  ## `[digest, inputs[0], inputs[1], inputs[2]]` in the v1 instances wire
-  ## format. Values must already be canonical big-endian `Fr` encodings;
+  ## Encodes the Poseidon2 hash public instance column
+  ## `[digest, inputs[0], .., inputs[n-1]]` in the v1 instances wire format.
+  ##
+  ## `inputs.len` must be in `0..=12` (12). This
+  ## covers the legacy circuit id 2 (3 inputs) and the arbitrary-arity family
+  ## (`BASE + n`). Values must already be canonical big-endian `Fr` encodings;
   ## non-canonical inputs raise `ValueError`.
-  encodePublicInstances([digest, inputs[0], inputs[1], inputs[2]])
+  if inputs.len > Halo2IpaBn254Poseidon2MaxArity:
+    raise newException(
+      ValueError,
+      "Halo2IpaBn254.encodePoseidon2HashInstances: inputs must be 0.." &
+        $Halo2IpaBn254Poseidon2MaxArity,
+    )
+  var values = newSeqOfCap[Bn254Fr](inputs.len + 1)
+  values.add digest
+  for input in inputs:
+    values.add input
+  encodePublicInstances(values)
+
+proc provePoseidon2Hash*(
+    T: type Halo2IpaBn254;
+    provingKey: openArray[byte];
+    inputs: openArray[Bn254Fr];
+    digest: Bn254Fr;
+): seq[byte] =
+  ## Proves the arbitrary-arity Poseidon2 hash circuit in `provingKey` with the
+  ## OS CSPRNG for blinding.
+  ##
+  ## `inputs.len` must be in `0..=12` and must match
+  ## the arity encoded in the proving key header. The witness is the
+  ## concatenation of the canonical big-endian `Fr` inputs (empty for 0 inputs)
+  ## and the public instance column is `[digest, inputs...]`. A digest that does
+  ## not equal the circuit's Poseidon2 output is rejected by the Rust core with
+  ## `ValueError`.
+  if inputs.len > Halo2IpaBn254Poseidon2MaxArity:
+    raise newException(
+      ValueError,
+      "Halo2IpaBn254.provePoseidon2Hash: inputs must be 0.." &
+        $Halo2IpaBn254Poseidon2MaxArity,
+    )
+  var witness = newSeqOfCap[byte](inputs.len * Bn254FrLen)
+  for input in inputs:
+    witness.add input
+  let instances = encodePoseidon2HashInstances(inputs, digest)
+  prove(Halo2IpaBn254, provingKey, witness, instances)

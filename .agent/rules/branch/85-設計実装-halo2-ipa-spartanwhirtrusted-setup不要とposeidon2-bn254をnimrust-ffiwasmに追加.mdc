@@ -95,8 +95,8 @@ main tree ac043d851706b342df1b38292c0f6df1316682e8 を調査。関連 #69, #70, 
 - [x] ICP canister（Halo2 IPA verify + Poseidon2 hash）を PocketIC で実行。mainnet deploy / dfx / Candid UI は未対応。
 - [x] 検証専用 feature `halo2-ipa-verify-only` と canister の import 最小化（`ic0` 5 関数のみ）
 - [x] 1k / 20k 相当の汎用 IPA 合成ベンチ + 環境/RSS/JSON レポート（アプリ等価ではない）
-- [ ] 汎用回路記述子 / Noir frontend / Poseidon2 回路の任意 arity 登録（circuit id 2 は 3 入力固定で実装済み。任意 arity は未実装）
-- [ ] Poseidon2 Halo2 回路自体の browser Worker / ICP canister prove（wasm32-wasip1 実行と C ABI 検証は実装済み）
+- [x] 汎用回路記述子 / Noir frontend / Poseidon2 回路の任意 arity 登録（任意 arity `0..=12` は `0x100+n` として登録済み。汎用回路記述子 / Noir frontend は未実装）
+- [x] Poseidon2 Halo2 回路の browser Worker prove（circuit id 2、Chromium）と ICP canister verify（circuit id 2 VK を pin、PocketIC cold/warm 計測）。ICP canister 内 proving は未試行。
 - [x] Spartan+WHIR Phase 0 調査 + blocked ADR（`docs/spartan-whir.md`, `docs/adr/ADR-0085-spartan-whir.md`）
 
 ### 設計まとめ（追記）
@@ -110,8 +110,8 @@ main tree ac043d851706b342df1b38292c0f6df1316682e8 を調査。関連 #69, #70, 
 - ICP verifier は `halo2-ipa-verify-only` で prover/keygen と prepare/prove/pk_validate シンボルを除外し、`halo2-axiom` を `default-features=false` + vendored patch でビルドする。wasm import は `ic0` 5 関数のみ（`__wbindgen`/`getrandom`/Web Crypto なし）。Poseidon2 hash canister も同様に import を `ic0` のみに保つ。
 - ICP verify の 18.2B instructions は毎回の `ParamsIPA::new(k)`（k=8）が支配的。params キャッシュやバッチ検証は未実装であり、mainnet cycle quote ではない。
 - `halo2-ipa-params-cache` を追加し、thread-local 単一スロットに `(k, ParamsIPA)` を保持する。同一 canister instance の 2 回目以降は 568M instructions（cold 18.2B の約 1/32）。heap のみで upgrade で失われ、信頼済み SRS キャッシュではない。
-- Poseidon2 Halo2 は `circuit_id=2`（3 入力固定）として C ABI/Nim に登録した。witness=96 byte、公開入力 `[digest, in0, in1, in2]`、k>=7。fixture は `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。任意 arity は未登録。
+- Poseidon2 Halo2 は `circuit_id=2`（3 入力固定）として C ABI/Nim に登録した。witness=96 byte、公開入力 `[digest, in0, in1, in2]`、k>=7。fixture は `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。任意 arity は `circuit_id = 0x100 + n`（n=0..=12）で登録し、witness=`32n` byte、公開入力=`n+1` 値、最小 k は行数から計算（0..3→7、4..9→8、10..12→9）。arity 12 の fixture は `tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex`。
 - Poseidon1 Halo2 は width 4・3 入力固定の比較デモとして実装した（C ABI 未登録）。同一 k=10 で Poseidon1 は Poseidon2 より VK/PK/proof が小さい（VK 682 vs 1,194 B、PK 1,475,438 vs 2,524,654 B、proof 3,488 vs 5,728 B）が、prove/verify 時間は実行ノイズが大きい。
-- Poseidon2 Halo2 回路は `wasm32-wasip1` で keygen/prove/verify を実行済み。wasm は約 9.98 MB、keygen 約 12 s / prove 約 5.6 s / verify 約 0.16 s（Node WASI、この環境）。
+- Poseidon2 Halo2 回路は `wasm32-wasip1` で keygen/prove/verify を実行済み。wasm は約 9.98 MB、keygen 約 11–12 s / prove 約 6 s / verify 約 0.15 s（Node WASI、この環境）。Browser Worker では circuit id 2 を Chromium で prepare/prove/verify 済み（wasm 約 3.97 MB、prepare 約 3.5 s / prove 約 5.6 s / verify 約 2.0 s、`crossOriginIsolated=false`）。ICP では circuit id 2 の verify-only canister を PocketIC で実行（cold 18.52B / warm 866M instructions、54 pages、imports は `ic0` のみ）。canister 内 proving は未試行。
 - Poseidon2 は pso-poseidon 0.5.0 / Noir `bn254_blackbox_solver` v1.0.0-beta.22 の定数のみ vendoring し、既存 `ark-bn254` 0.5 の `Fr` で実装した（ark 0.6 の二重依存なし）。公開 hash は Noir/Barretenberg sponge であり、psonet の常時最終 permutation framing とは非ゼロ3倍数で異なる。
 - wasm 検証は「build 成功」ではなく Node 上で fixture/KAT を実行して確認した。Halo2 IPA の unknown-target module は他コード由来の host import を持つため、全 import を throw stub に置換して verify が RNG を呼ばないことを確認している。

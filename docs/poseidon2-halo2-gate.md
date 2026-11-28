@@ -274,19 +274,26 @@ n=3、k=10 の実測（Ubuntu native、release、1 回の実行。時間は実�
   （96 バイト）、公開入力は 1 列 `[digest, input0, input1, input2]`、`k >= 7`。
   Nim 側は `Halo2IpaBn254CircuitPoseidon2Hash3V1` と
   `encodePoseidon2HashInstances` を提供する。fixture は
-  `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。
-- **arity は 3 固定**。`Poseidon2HashCircuit` 自体は 0..=12 入力を扱えるが、
-  C ABI に登録したのは 3 入力の 1 変種だけである。任意 arity を登録するには
-  回路 id の追加と固定列レイアウトのレビューが必要。
+  `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。この id は互換用に変更しない。
+- **任意 arity `0..=12` も登録済み**。`HALO2_IPA_BN254_CIRCUIT_POSEIDON2_HASH_V1_BASE
+  = 0x100` に対し `circuit_id = BASE + n`。witness は `32 * n` バイト
+  （`n = 0` は 0 バイト、NULL ポインタ可）、公開入力は 1 列 `n + 1` 値
+  `[digest, inputs...]`。最小 `k` は `2^k - 6 >= hash_circuit_rows(n)` を
+  満たす最小値で、`n = 0..=3` は 7、`4..=9` は 8、`10..=12` は 9。Nim 側は
+  `Halo2IpaBn254CircuitPoseidon2HashV1Base`、`preparePoseidon2Hash` /
+  `provePoseidon2Hash`、`poseidon2HashCircuitId` / `poseidon2HashMinK` を
+  提供する。arity 12 fixture は
+  `tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex`（`circuit_id = 268`,
+  `k = 9`）。
 - **Poseidon1 の Halo2 custom gate は比較用に実装済み**
   （[`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md)）。同一 k=10・同一 IPA
   での rows/VK/PK/proof 比較は [`benchmarks-branch85.md`](benchmarks-branch85.md)
   に記録。width 4・3 入力固定の比較デモであり、C ABI/Nim には未登録。
 - **wasm/ICP 実行**: Poseidon2 回路自体は `wasm32-wasip1` で実行済み。
-  browser Worker / ICP canister での Poseidon2 gate prove、および任意 arity の
-  回路登録は未対応。canister verifier は circuit id 2 の VK/証明を検証できる
-  （`halo2-ipa-params-cache` 併用可）。
+  browser Worker / ICP canister での Poseidon2 gate prove は未対応。canister
+  verifier は circuit id 2 の VK/証明を検証できる（`halo2-ipa-params-cache`
+  併用可）。任意 arity の canister 側 VK 登録・展開は未検証。
 - 汎用回路記述子・Noir frontend・VK 復元レジストリへの任意 Poseidon2 登録は
-  未実装。
+  未実装（登録はコンパイル時の固定 arity のみ）。
 - Spartan+WHIR 側の Poseidon2 gadget、Poseidon1 との制約数・WASM
   instructions/cycles の実測比較は別タスク。

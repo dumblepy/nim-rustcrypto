@@ -1,13 +1,14 @@
 # ICP canister: Halo2 IPA verify-only / Poseidon2 hash (branch 85)
 
-生バイトの raw IC update エンドポイントとして、次の 2 つの canister を追加した。
+生バイトの raw IC update エンドポイントとして、次の 3 つの canister を追加した。
 
 | canister | crate | method | 役割 |
 |---|---|---|---|
-| Halo2 IPA/BN254 verifier | `examples/halo2-ipa-ic-verifier` | `canister_update verify` | ビルド時にピン留めした VK で v1 proof を検証 |
+| Halo2 IPA/BN254 verifier（cubic, id 1） | `examples/halo2-ipa-ic-verifier` | `canister_update verify` | ビルド時にピン留めした VK で cubic の v1 proof を検証 |
+| Halo2 IPA/BN254 verifier（Poseidon2 hash3, id 2） | `examples/halo2-ipa-poseidon2-ic-verifier` | `canister_update verify` | ビルド時にピン留めした id 2 VK で Poseidon2 回路の v1 proof を検証 |
 | Poseidon2/BN254 hash | `examples/poseidon2-ic-hash` | `canister_update hash` | 0..=12 個の `Fr` を Noir/Barretenberg sponge でハッシュ |
 
-どちらも Candid ではなく、IC の raw update エンドポイント（`ic0.msg_arg_data_*` /
+いずれも Candid ではなく、IC の raw update エンドポイント（`ic0.msg_arg_data_*` /
 `msg_reply_*`）を使う。呼び出し側は生のバイト列を渡し、生のバイト列を受け取る。
 任意の VK、witness、params、prover、RNG を公開するエンドポイントは無い。
 
@@ -57,7 +58,9 @@ i32 status LE || u64 verifier instructions LE || u32 wasm memory pages LE   (16 
 環境変数で渡す。canister は **この VK 以外を受け取らない**。VK の差し替えは
 コード変更・再ビルド・レビューを要求する。canister のレジストリ自体は
 `circuit_id = 1`（`y = x^3 + x + 5`）と `circuit_id = 2`（3 入力 Poseidon2
-hash）の両方をデコードできるが、pin した VK は id 1 のみである。
+hash）の両方をデコードできるが、この canister が pin している VK は id 1
+のみである。id 2 を検証する canister は §2 の別 crate で、id 2 の VK を pin
+する。
 
 ### 1.4 verify-only feature
 
@@ -106,9 +109,87 @@ import は無い。`__getrandom_custom` は export されるが、外部 import 
 
 ---
 
-## 2. Poseidon2 hash canister
+## 2. Poseidon2 IPA verifier canister（circuit id 2）
 
-### 2.1 リクエスト / リプライ
+### 2.1 crate とビルド
+
+`examples/halo2-ipa-poseidon2-ic-verifier` は §1 の cubic verifier を複製し、
+pin する VK だけを circuit id 2 用に変えた canister である。
+
+- package: `halo2-ipa-poseidon2-ic-verifier`
+- lib / wasm: `halo2_ipa_poseidon2_ic_verifier.wasm`
+- 同じ module include（`status` / `aead_common` / `bn254` / `poseidon2` /
+  `poseidon2_halo2` / `halo2_ipa`）、同じ features
+  `halo2-ipa-verify-only,halo2-ipa-params-cache`、同じ dependency /
+  `[patch.crates-io]` / getrandom の fail-closed stub を使う。
+- `const APPROVED_VK: &[u8] = include_bytes!(env!("HALO2_IPA_APPROVED_VK"));`
+  に `tests/fixtures/halo2_ipa_poseidon2_v1.hex` の `VK`（1,214 bytes）を
+  `HALO2_IPA_APPROVED_VK` で渡す。
+- raw な `canister_update verify` を公開し、任意の VK / witness / params /
+  prover / RNG は受け付けない。
+
+```bash
+cd /application
+HALO2_IPA_APPROVED_VK=/tmp/ic-branch85-p2/poseidon2_vk.bin \
+  cargo build --locked --release \
+    --features halo2-ipa-verify-only,halo2-ipa-params-cache \
+    --manifest-path examples/halo2-ipa-poseidon2-ic-verifier/Cargo.toml \
+    --target wasm32-unknown-unknown
+```
+
+### 2.2 リクエスト / リプライ
+
+```text
+arg   = v1 proof bytes || v1 instances bytes
+reply = i32 status LE || u64 verifier instructions LE || u32 pages LE   (16 bytes)
+```
+
+- proof は `"RCH2IPF1" | proof_len u32 BE | transcript`。proof と instances の
+  分割は `proof_len` から決める。
+- instances は `"RCH2IPI1" | 1 | 4 | digest | input0 | input1 | input2`
+  （144 bytes）。digest は 3 入力 Poseidon2 sponge の出力と一致しなければ
+  ならない。
+- `status == 0` のときだけ検証成功。改変 proof / 改変 instance は `8`
+  （verification failed）。`proof_len == 0`、`> 4 MiB`、切り詰め、末尾余剰、
+  `instances` の形状不正は `9`。非 canonical `Fr` は `20`。
+- 引数全体が `4 MiB（proof）+ 1 MiB（instances）+ 12 bytes` を超える場合は
+  コピー前に `9` を返す（mock `ic0` で `msg_arg_data_copy` 未呼び出しを確認）。
+
+### 2.3 実測（この run）
+
+測定環境は §1 と同じ（Node `v24.22.1`、`@dfinity/pic` 0.25.0、release +
+fat LTO + `strip = "symbols"`）。fixture は k=8、proof 5,612 bytes、
+instances 144 bytes、VK 1,214 bytes。
+
+| 項目 | cold | warm |
+|---|---:|---:|
+| status | 0 | 0 |
+| `performance_counter` 差分 (instructions) | 18,523,734,643 | 865,660,902 |
+| wasm memory | 54 pages / 3,538,944 bytes | 54 pages / 3,538,944 bytes |
+| PocketIC update cycles（参考） | 18,542,200,989 | — |
+| wasm size | 2,810,841 bytes | 同左 |
+| wasm functions（import + defined） | 5 + 451 = 456 | 同左 |
+| wasm imports | `ic0` 5 関数のみ | 同左 |
+
+- cold は `ParamsIPA::new(8)` の決定的な params 生成が支配的である。
+- warm は `halo2-ipa-params-cache` により同一 canister instance の 2 回目で
+  params を clone するだけであり、cold の約 1/21。heap のみで upgrade /
+  reinstall で失われ、stable memory へ永続化しない。
+- 改変 proof / 改変 instance は status `8`、5 MiB 超は status `9` かつ
+  コピー前に拒否。
+- wasm import は `msg_arg_data_size`、`msg_arg_data_copy`、
+  `performance_counter`、`msg_reply_data_append`、`msg_reply` の `ic0` 5 関数
+  のみ。`__wbindgen` / `getrandom` / Web Crypto の import は無い。
+- Poseidon2 VK の SHA-256:
+  `c7569f8e59692d914d56f1a9e5f0aab5e786922c1cbfe8d0bc3c4a732854b4ce`。
+  proof の SHA-256:
+  `d6a2956b99163c59b098ad74eaddd3fb6316bbd69d9f212ec66bf9fac12df7c5`。
+
+---
+
+## 3. Poseidon2 hash canister
+
+### 3.1 リクエスト / リプライ
 
 ```text
 arg   = count * 32 bytes（canonical BN254 Fr の 32-byte big-endian、count = 0..=12）
@@ -126,7 +207,7 @@ reply = i32 status LE || u64 instructions LE || u32 pages LE || digest (32 bytes
 
 ---
 
-## 3. ビルドと実行
+## 4. ビルドと実行
 
 ```bash
 # 成果物ディレクトリを指定（省略時は mktemp）
@@ -136,19 +217,25 @@ bash ci/test_ic_branch85.sh /tmp/ic-branch85
 スクリプトの処理:
 
 1. `tests/fixtures/halo2_ipa_bn254_v1.hex` から `vk.bin` / `proof.bin` /
-   `instances.bin` / `witness.bin` を抽出
+   `instances.bin` / `witness.bin` を、`tests/fixtures/halo2_ipa_poseidon2_v1.hex`
+   から `poseidon2_vk.bin` / `poseidon2_proof.bin` /
+   `poseidon2_instances.bin` / `poseidon2_witness.bin` を抽出
    （`web/ic-branch85/extract-fixture.cjs`）。
-2. `wasm32-unknown-unknown` release で両 canister をビルド。
-   IPA は `--features halo2-ipa-verify-only,halo2-ipa-params-cache` と
-   `HALO2_IPA_APPROVED_VK=<artifacts>/vk.bin` を指定。
-3. PocketIC を起動し、2 canister を install して cycles を追加。
-4. IPA `verify` に `proof || instances` を渡して status 0、命令数、ページ数を
-   取得する。続けて同じ引数でもう一度呼び、cold / warm の命令数を記録する。
-   proof 1 バイト改変・instance 1 バイト改変・不正エンベロープ・
+2. `wasm32-unknown-unknown` release で 3 canister をビルド。IPA verifier は
+   `--features halo2-ipa-verify-only,halo2-ipa-params-cache` と
+   `HALO2_IPA_APPROVED_VK=<artifacts>/vk.bin`（cubic）または
+   `<artifacts>/poseidon2_vk.bin`（Poseidon2）を指定する。
+3. PocketIC を起動し、3 canister を install して cycles を追加。
+4. cubic IPA `verify` に `proof || instances` を渡して status 0、命令数、
+   ページ数を取得する。続けて同じ引数でもう一度呼び、cold / warm の命令数を
+   記録する。proof 1 バイト改変・instance 1 バイト改変・不正エンベロープ・
    5 MiB 超（mock `ic0`）がすべて非 0 になることを確認。
-5. Poseidon2 `hash` に `[1,2,3]` を渡して既知 digest と一致することを確認。
+5. Poseidon2 IPA `verify` に `poseidon2_proof || poseidon2_instances` を渡して
+   status 0、cold / warm 命令数、ページ数を取得する。proof / instance 改変と
+   5 MiB 超が非 0 になることを確認。
+6. Poseidon2 `hash` に `[1,2,3]` を渡して既知 digest と一致することを確認。
    長さ不正・非 canonical・13 個が非 0 になることを確認。
-6. `ic-measurements.json` に cold/warm 命令数、ページ数、wasm サイズ、import、
+7. `ic-measurements.json` に cold/warm 命令数、ページ数、wasm サイズ、import、
    関数数、cycles を書き出す。
 
 手動ビルド例:
@@ -161,12 +248,18 @@ HALO2_IPA_APPROVED_VK=/tmp/ic-branch85/vk.bin \
     --features halo2-ipa-verify-only,halo2-ipa-params-cache \
     --manifest-path examples/halo2-ipa-ic-verifier/Cargo.toml \
     --target wasm32-unknown-unknown
+HALO2_IPA_APPROVED_VK=/tmp/ic-branch85/poseidon2_vk.bin \
+  cargo build --locked --release \
+    --features halo2-ipa-verify-only,halo2-ipa-params-cache \
+    --manifest-path examples/halo2-ipa-poseidon2-ic-verifier/Cargo.toml \
+    --target wasm32-unknown-unknown
 cargo build --locked --release \
   --manifest-path examples/poseidon2-ic-hash/Cargo.toml \
   --target wasm32-unknown-unknown
 node web/ic-branch85/ic-smoke.cjs /tmp/ic-branch85 \
   "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/halo2_ipa_ic_verifier.wasm" \
-  "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/poseidon2_ic_hash.wasm"
+  "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/poseidon2_ic_hash.wasm" \
+  "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/halo2_ipa_poseidon2_ic_verifier.wasm"
 ```
 
 `@dfinity/pic` は `web/groth16-prover/node_modules` を `createRequire` で再利用する
@@ -174,11 +267,12 @@ node web/ic-branch85/ic-smoke.cjs /tmp/ic-branch85 \
 
 ---
 
-## 4. 実測（ローカル PocketIC）
+## 5. 実測（ローカル PocketIC）
 
 測定環境: Node `v24.22.1`、`@dfinity/pic` 0.25.0、`opt-level = 3`、fat LTO、
 `codegen-units = 1`、`strip = "symbols"`。fixture は k=8、proof 1164 bytes、
-instances 48 bytes。
+instances 48 bytes。下表は cubic verifier と Poseidon2 hash の既存記録である。
+circuit id 2 の Poseidon2 IPA verifier の実測は §2.3 に記載する。
 
 | 項目 | Halo2 IPA verify (cold) | Halo2 IPA verify (warm) | Poseidon2 hash [1,2,3] |
 |---|---:|---:|---:|
@@ -194,6 +288,10 @@ instances 48 bytes。
 2 回目である。`halo2-ipa-params-cache` により warm は params を再生成せず、
 命令数が約 32 分の 1 になっている（18.2B → 0.57B）。`updateCyclesDebited` は
 cold 呼び出しの値のみを示す。warm の cycles は個別には記録していない。
+
+Poseidon2 追加後の再実行では、cubic は cold
+18,226,479,760 instructions、wasm 2,809,753 bytes、5 + 451 = 456 functions
+であった。toolchain / LTO により命令数・モジュールサイズはこの程度変動する。
 
 IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
 `performance_counter`、`msg_reply_data_append`、`msg_reply` のみ。
@@ -223,10 +321,11 @@ IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
 
 ---
 
-## 5. 再現性
+## 6. 再現性
 
-- fixture は `tests/fixtures/halo2_ipa_bn254_v1.hex` に固定。
-- 両 example crate に `Cargo.lock` を commit し、`--locked` でビルドする。
+- fixture は `tests/fixtures/halo2_ipa_bn254_v1.hex`（cubic）と
+  `tests/fixtures/halo2_ipa_poseidon2_v1.hex`（id 2）に固定。
+- 3 つの example crate に `Cargo.lock` を commit し、`--locked` でビルドする。
 - `halo2-axiom` は `rustcrypto-ffi/third_party/halo2-axiom-0.5.3` を
   `[patch.crates-io]` で参照（`multicore` 既定 off の vendored copy）。
 - PocketIC server は `@dfinity/pic` 同梱のバイナリを使う。
@@ -234,7 +333,7 @@ IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
 
 ---
 
-## 6. 明示的な未対応・ギャップ
+## 7. 明示的な未対応・ギャップ
 
 - `dfx` による本番 canister のデプロイ手順・canister ID・controller 設定は
   未提供。PocketIC 上の install と update call のみを検証している。
@@ -244,6 +343,11 @@ IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
   smoke/measurement スクリプトのみ）。
 - Candid インターフェース、認証、課金、ステート管理、upgrade hook は無い。
   本 canister は「検証結果を返すだけ」で状態を変更しない。
+- Poseidon2 IPA verifier も **verify 専用**であり、canister 内での proving /
+  keygen は実装・試行していない。ブラウザ Worker での prove と ICP での
+  verify は別経路である。この canister が pin するのは circuit id 2（3 入力固定）
+  であり、C ABI/Nim の任意 arity `0x100+n` 用の VK は別途ビルド・pin が必要。
+- ブラウザ検証は headless Chromium のみで、Firefox / Safari は未検証。
 - **IPA params cache**: `halo2-ipa-params-cache` により同一 canister インスタンス
   内の warm call は params を再生成しない。ただし単一 thread-local スロットの
   heap キャッシュであり、upgrade / reinstall で失われ、stable memory や

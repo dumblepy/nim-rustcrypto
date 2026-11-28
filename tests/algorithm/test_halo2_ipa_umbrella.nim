@@ -25,6 +25,7 @@ suite "halo2 ipa through the rustcrypto umbrella module":
   test "constants are exported":
     check Halo2IpaBn254CircuitCubicV1 == 1'u32
     check Halo2IpaBn254CircuitPoseidon2Hash3V1 == 2'u32
+    check Halo2IpaBn254CircuitPoseidon2HashV1Base == 0x100'u32
     check Halo2IpaBn254MinK == 4'u32
     check Halo2IpaBn254Poseidon2Hash3MinK == 7'u32
     check Halo2IpaBn254MaxK == 16'u32

@@ -96,6 +96,7 @@ Per-primitive and per-protocol guides (English):
 - [Poseidon2 / BN254 (Noir/Barretenberg-compatible)](docs/poseidon2-bn254.md)
 - [Poseidon2 / BN254 Halo2 custom gate (Rust demo)](docs/poseidon2-halo2-gate.md)
 - [Poseidon2 / BN254 Halo2 gate on wasm32-wasip1](docs/poseidon2-halo2-wasm.md)
+- [Poseidon2 Halo2 browser Worker / ICP verifier](docs/poseidon2-halo2-browser-icp.md)
 - [Poseidon1 / BN254 Halo2 custom gate (comparison demo)](docs/poseidon1-halo2-gate.md)
 - [Groth16 / BN254 verifier](docs/groth16-bn254.md)
 - [PLONK / BN254 verifier (genshi-core profile)](docs/plonk-bn254.md)

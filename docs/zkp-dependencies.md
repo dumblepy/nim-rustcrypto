@@ -156,11 +156,13 @@ WHIR + full ZK + wasm32; `spartan2` does not use WHIR. None was added.
 | Item | Native | `wasm32-unknown-unknown` | `wasm32-wasip1` | Nim | Status |
 |---|---|---|---|---|---|
 | Poseidon2 / BN254 | Rust KAT + Nim tests pass | Runtime smoke pass (0 imports) | Runtime smoke pass | Yes | Implemented |
-| Poseidon2 Halo2 gate | MockProver KATs + IPA example pass | Not executed | Runtime prove/verify pass (Node WASI) | Yes (circuit id 2, 3-input fixed) | Implemented |
+| Poseidon2 Halo2 gate | MockProver KATs + IPA example pass | Not executed | Runtime prove/verify pass (Node WASI) | Yes (circuit id 2 + `0x100+n` 0..=12) | Implemented |
+| Poseidon2 Halo2 browser/ICP | — | Chromium Web Worker prove id 2 | — | No | Implemented (browser prove, ICP verify) |
 | Poseidon1 Halo2 gate | MockProver KAT + IPA comparison pass | Not executed | Not executed | No (comparison demo) | Implemented |
 | Halo2 IPA / BN254 | Rust fixtures + Nim tests pass | Runtime smoke pass (host imports stubbed to throw) | Runtime smoke pass | Yes | Implemented (cubic + Poseidon2 hash3) |
 | Halo2 IPA browser prove | — | Chromium Web Worker, `crossOriginIsolated=false` | — | No | Implemented (cubic circuit) |
 | Halo2 IPA ICP verify | PocketIC update call | verify-only canister, `ic0`-only imports, params cache cold/warm | — | No | Implemented (not mainnet) |
+| Poseidon2 IPA ICP verify | PocketIC update call (id 2 VK pinned) | verify-only canister, `ic0`-only imports, cold/warm | — | No | Implemented (not mainnet) |
 | Poseidon2 ICP hash | PocketIC update call | canister, `ic0`-only imports | — | No | Implemented (not mainnet) |
 | Spartan+WHIR / BN254 | Not implemented | Not implemented | Not implemented | Not implemented | **Blocked** |
 
