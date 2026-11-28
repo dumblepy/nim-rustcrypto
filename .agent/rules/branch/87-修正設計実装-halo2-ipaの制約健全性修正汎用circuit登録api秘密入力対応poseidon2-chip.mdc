@@ -1,0 +1,47 @@
+---
+description: 87-修正設計実装-halo2-ipaの制約健全性修正汎用circuit登録api秘密入力対応poseidon2-chip ブランチでの開発時に読み込む
+alwaysApply: false
+---
+## 目的
+#85 / #86 で追加した Halo2 IPA/BN254/Blake2b と Poseidon2 を、アプリケーション固有の複合回路で安全に再利用できる汎用ライブラリへ拡張する。動機は Synoria Wallet の [s4-token #91](https://github.com/dumblepy/synoria-wallet/issues/91)（Deposit/Transfer/Withdraw、ERC20/BTCの6回路）だが、資産・台帳・Noteの固有仕様は本リポジトリに持ち込まない。既存Groth16/KZG/Poseidon1と他の公開APIは維持する。Trusted Setup不要、full-ZK、canonical BN254 Fr、client-side prove / ICP verifyを前提とする。
+
+レビュー基準: [eee67144](https://github.com/dumblepy/nim-rustcrypto/commit/eee67144c508cc06344770026e5d90a68ede5d9e)。着手時に最新mainと既存修正を確認する。性能最適化（Params事前生成、複数kキャッシュ、Advice列削減、ICP scaling）は別Issue。
+
+## 1. P0: Poseidon2 spongeの制約不足の修正
+対象: [poseidon2_halo2.rs L880–888](https://github.com/dumblepy/nim-rustcrypto/blob/eee67144c508cc06344770026e5d90a68ede5d9e/rustcrypto-ffi/src/poseidon2_halo2.rs#L880-L888)、assign_block、s_absorb gate。
+
+静的レビューでは、吸収される実入力レーンだけがraw inputセルへcopy constraintされ、未使用rate laneおよびcapacity laneのゼロが拘束されていない疑いがある。sponge_witnessesがゼロを代入するだけでは悪意あるProverに対する制約にならない。現時点では不正proof生成による独立した再現は未実施。まず負例で再現/反証し、健全性を確認するまで資産用回路には使用しない。
+
+- width=4, rate=3, capacity=1。全blockでcapacity吸収値を0に拘束し、partial/empty blockで未使用rate laneも0に拘束する。capacity **state** を0にするのではなく、capacityへの加算値を0にすること。
+- 例: 実入力をcopy constraintした後、未使用吸収セルに constrain_constant(cell, Fr::ZERO) を適用（実際のHalo2 API・定数列に合わせる）。length IV、block間state copy、padding、round constants、全round、digest抽出も確認。Noir/Barretenberg互換profile（t4/rate3/x5/RF8/RP56、非ゼロrate倍数の最終block規則）を変えない。
+- 改変した吸収値に合わせてinput/state/pow2/pow5/後続全round/digestを再計算した悪意あるwitnessを構成し、MockProverで拒否。単に正規prover helperが入力不一致を拒否するだけでは不十分。可能なら実proof生成/verify負例も追加。全arity 0..12、特に0/1/2/3/4/6/9/12、複数blockの途中/末尾、capacity/padding別、length IV/copy constraint改変を網羅する。
+- 制約変更はVK/PKを変える。旧hash回路用artifactを新しい健全な回路のものとして受理しない。影響範囲を調査し、必要なcircuit revision/ID・profile migration・旧回路の無効化方針を明示する。脆弱な互換経路を残さない。既存fixtureを再生成し、旧artifactの拒否を試験。native Poseidon2の正しい出力は維持する。
+
+## 2. 汎用Halo2 IPA API / コンパイル時Circuit adapter
+現状: halo2_ipa.rsのvalid_circuit_id、parse_vk/parse_pk、parse_instances_for、key_material、prove dispatch、およびNimラッパーはcubicと公開入力Poseidon2 hash回路（id 1, 2, 0x100+n）を固定登録する。VerifyingKey::read / ProvingKey::readは具体Circuit型が必要であり、単に新IDをバイト列で渡しても利用できない。
+
+設計:
+- Halo2のtyped Rust APIを外部crateから利用できる形で公開する。概念: prepare<C: Circuit<Fr>>(circuit, approved config)、prove<C>(PK, circuit/witness, expected instances, CSPRNG)、verify<C>(VK, proof, expected instances, params)。Circuit::Params、floor planner、without_witnesses、layoutの固定・再現性、VK/PK復元、既存wire形式との整合性を明文化。trait境界は実際のvendored Halo2仕様に合わせる。既存BHG/BGH19プロファイルのopening strategy・SingleStrategyによる最終MSM・Blake2b transcriptを維持。
+- 利用側Rust crateが承認済みCircuit型をコンパイル時に登録し、C ABIとBrowser WASMで同じadapter/registryを生成・共有できるようにする（trait/macro/生成コード等を比較）。任意実行コード・動的回路descriptor・未承認VKの外部入力による実行は禁止。アプリ側でCircuit ID/バージョン/schema/k/VK/Params digestをpinする。
+- Circuitごとのwitness encoding、公開instance列数/値数、min/max k、proof/PK/VK上限を型・registryに紐付ける。既存RCH2IPV1/RCH2IPP1/RCH2IPF1/RCH2IPI1 codecは意味を維持し、必要な変更は新versionを明示。正規32-byte BE Fr、非canonical/trailing bytes/未知ID/異なる回路・鍵・公開値を拒否。少なくとも1列17公開Frを扱う外部回路例を含める。
+- 呼出側が独立にexpectedPublicInstancesを渡す契約を維持。信頼済みPK/VKのdigest固定、decode/allocate前のbounded validation、panic=abort wasmでtrapしないことを検証。既存C ABI/Nim type-first APIは壊さず拡張する。verify-only featureとC ABIの分離も維持し、外部Circuit登録のビルド方法を文書化する。
+- 外部アプリcrateが独自Circuitを定義し、rustcrypto本体ソースを書き換えずにnative prepare/prove/verify、Browser WASM prove、Nim staticlink verifyができる最小例を追加。汎用FFIを装うための単体hash証明の合成はしない。
+- Proverの乱数はOS/browser CSPRNG。既存one-shot cacheに保持するwitness/一時コピーの寿命を見直し、zeroize・cancel/error/短い出力buffer再試行時の安全な破棄を検証。verify-onlyでは秘密・RNG・proverを必要としない。
+
+## 3. 秘密入力対応の再利用可能なPoseidon2 Chip
+現状Poseidon2HashCircuitはdigestと全inputをinstanceに公開し、configure_poseidon2/assign_block等は内部関数である（[poseidon2_halo2.rs L790–901](https://github.com/dumblepy/nim-rustcrypto/blob/eee67144c508cc06344770026e5d90a68ede5d9e/rustcrypto-ffi/src/poseidon2_halo2.rs#L790-L901)）。このままでは他gadgetから秘密入力を受け取るNote/Merkle回路を構成できない。
+
+- 公開Poseidon2Chip/Config等を用意し、既に割り当て・制約されたAssigned Cell（またはcellとValueを安全に扱う型）を受け取り、copy constraintでhash/permutationに接続し、制約済みdigest/stateのCellを返す。呼出側だけが必要なセルをinstanceへ公開する。Chip自身が全入力を公開しない。
+- 複数hashの連鎖、秘密preimage、public/private混在、同一Chipの繰り返し利用、0..12入力の固定長sponge、domain tagを含む入力、without_witnessesでのkeygen、複数regionの配置をサポートする。arbitrary arityは回路形状として固定。hostで計算したdigestを無制約に渡すことは禁止。
+- 現行単体hash/permutation回路を安全なChipの利用例にする。既存native/Nim/browser hashのKATと整合し、全round・吸収制約は第1節修正を共有する。
+- 汎用のRange Check(u64/u128 limb)、boolean、conditional select、nonzero/equality、copy bindingを組み合わせるための小規模gadgetまたは既存安全な実装の利用例を用意。秘密Merkle sibling/directionを使う可変path、複数hash、公開digestだけを公開する複合サンプルを追加。u128 overflow/field wraparoundを拒否し、資産固有ロジックは入れない。
+
+## 4. テスト・完了条件
+- [ ] 未使用吸収レーンの制約健全性を再現/修正し、悪意あるwitness負例・KATを通す。旧鍵/回路の取扱いとセキュリティ影響を記録。
+- [ ] 外部crateの独自複合Circuitを登録し、既存rustcryptoソース変更なしでprepare/prove/verify。独立した公開instance（17値以上の例を含む）・VK pinning、誤入力/誤鍵/異回路/改変proof/不正encoding/過大入力を拒否。
+- [ ] Poseidon2 Chipで秘密preimageとMerkle path、連鎖hash、range/boolean/selectの制約が正しく動く。witness-only計算・未拘束セル・不用意な公開入力への漏洩がない。
+- [ ] Rust native、Nim native、wasm32-unknown-unknown / wasm32-wasip1の正負fixture、Browser Worker（COOP/COEP不要の単一スレッド）、Nimから静的リンクしたICP canisterのPocketIC検証を通す。同一artifact/proofの相互運用を確認する。buildだけでは完了としない。
+- [ ] verify-only archive/FFI symbol、release consumer install、既存Groth16/KZG/Poseidon1/その他の回帰、codec fuzz/DoS/panicの試験。docs/halo2-ipa.md、docs/poseidon2-halo2-gate.md、README、release/CI、branch ruleを更新し、commit/version/shaで固定可能な配布物を用意する。
+- [ ] 未監査であることを明示し、独立レビューを前提とする。資産用途の安全性保証・性能目標達成をこのIssueだけで宣言しない。
+
+関連: #85、#86、[Synoria Wallet #91](https://github.com/dumblepy/synoria-wallet/issues/91)。
