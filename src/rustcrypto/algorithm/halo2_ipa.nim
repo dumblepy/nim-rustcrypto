@@ -3,7 +3,11 @@ import ./common
 import ./bn254
 
 const
-  ## v1 envelope headers: magic | (circuit_id, k, payload_len) or proof_len.
+  ## Key envelopes share the V1 header layout (magic | circuit_id, k, payload_len).
+  ## The magic is V1 (`RCH2IPV1` / `RCH2IPP1`) for cubic id 1 and V2
+  ## (`RCH2IPV2` / `RCH2IPP2`) for the Poseidon2 hash family and external
+  ## circuits. Proof (`RCH2IPF1`) and instances (`RCH2IPI1`) are
+  ## revision-independent.
   Halo2IpaBn254VkHeaderLen = 20
   Halo2IpaBn254PkHeaderLen = 20
   Halo2IpaBn254ProofHeaderLen = 12
@@ -86,10 +90,13 @@ proc prepare*(
   ##
   ## Supported circuits:
   ## - `Halo2IpaBn254CircuitCubicV1` (id 1): `k` in `Halo2IpaBn254MinK..MaxK`.
+  ##   Keys use V1 magic (`RCH2IPV1` / `RCH2IPP1`).
   ## - `Halo2IpaBn254CircuitPoseidon2Hash3V1` (id 2): 3-input Poseidon2 hash,
   ##   `k` in `Halo2IpaBn254Poseidon2Hash3MinK..MaxK`.
   ## - `Halo2IpaBn254CircuitPoseidon2HashV1Base + arity` (arity 0..=12):
   ##   fixed `arity`-input Poseidon2 hash, `k` at least `poseidon2HashMinK`.
+  ##   Both Poseidon2 forms use the sound V2 artifact revision
+  ##   (`RCH2IPV2` / `RCH2IPP2`); old V1-magic Poseidon2 keys are rejected.
   let minK =
     if circuitId == Halo2IpaBn254CircuitCubicV1:
       Halo2IpaBn254MinK
@@ -166,6 +173,8 @@ proc preparePoseidon2Hash*(
   ## `arity` must be in `0..=12` (12) and `k` at
   ## least `poseidon2HashMinK(arity)`. This is the arbitrary-arity API; circuit
   ## id `2` remains the legacy 3-input circuit available through `prepare`.
+  ## Both use the V2 artifact revision (`RCH2IPV2` / `RCH2IPP2`); V1-magic
+  ## Poseidon2 keys are rejected.
   let circuitId = poseidon2HashCircuitId(arity)
   let minK = poseidon2HashMinK(arity)
   if k < minK or k > Halo2IpaBn254MaxK:
@@ -177,7 +186,8 @@ proc preparePoseidon2Hash*(
   prepare(Halo2IpaBn254, circuitId, k)
 
 proc provingKeyCircuitId(provingKey: openArray[byte]): uint32 =
-  ## Reads the circuit id from the v1 PK header (magic | circuit_id u32 BE | ...).
+  ## Reads the circuit id from the PK header (layout shared by V1 and V2:
+  ## magic | circuit_id u32 BE | ...). The magic itself is revision-specific.
   for index in 8 ..< 12:
     result = (result shl 8) or uint32(provingKey[index])
 
@@ -331,7 +341,10 @@ proc verify*(
     raiseRustCryptoStatus(status, "rustcrypto_halo2_ipa_bn254_verify")
 
 proc validateVerifyingKey*(T: type Halo2IpaBn254; verifyingKey: openArray[byte]): bool =
-  ## Validates the v1 VK envelope, including the embedded `halo2_axiom` key.
+  ## Validates the VK envelope, including the embedded `halo2_axiom` key. The
+  ## magic must match the circuit id's revision: cubic id 1 is V1
+  ## (`RCH2IPV1`), Poseidon2 ids 2 / `BASE + n` are V2 (`RCH2IPV2`). Old
+  ## V1-magic Poseidon2 keys are rejected.
   if verifyingKey.len < Halo2IpaBn254VkHeaderLen or
       verifyingKey.len > Halo2IpaBn254MaxVkLen:
     return false
@@ -340,7 +353,10 @@ proc validateVerifyingKey*(T: type Halo2IpaBn254; verifyingKey: openArray[byte])
   ) == RustCryptoOk
 
 proc validateProvingKey*(T: type Halo2IpaBn254; provingKey: openArray[byte]): bool =
-  ## Validates the v1 PK envelope, including the embedded `halo2_axiom` key.
+  ## Validates the PK envelope, including the embedded `halo2_axiom` key. The
+  ## magic must match the circuit id's revision: cubic id 1 is V1
+  ## (`RCH2IPP1`), Poseidon2 ids 2 / `BASE + n` are V2 (`RCH2IPP2`). Old
+  ## V1-magic Poseidon2 keys are rejected.
   if provingKey.len < Halo2IpaBn254PkHeaderLen or
       provingKey.len > Halo2IpaBn254MaxPkLen:
     return false

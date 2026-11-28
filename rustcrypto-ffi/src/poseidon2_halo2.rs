@@ -7,13 +7,17 @@
 //! ordering, linear layers and Noir/Barretenberg sponge framing are the same as
 //! [`crate::poseidon2`].
 //!
-//! Two circuits are provided:
+//! Two standalone circuits and a reusable chip are provided:
 //!
 //! - [`Poseidon2PermutationCircuit`] constrains one width-4 permutation and
 //!   binds the input state and output state to the instance column.
 //! - [`Poseidon2HashCircuit`] constrains the full fixed-length sponge
 //!   (length IV, rate-3 absorption, Noir final-permutation rule) and binds the
 //!   raw inputs and the squeezed digest to the instance column.
+//! - [`Poseidon2Chip`] exposes the same gates for use inside larger circuits.
+//!   It takes already-assigned [`Poseidon2Input`] cells, constrains the sponge
+//!   or permutation, and returns the output state without touching the instance
+//!   column; the caller decides what to expose.
 //!
 //! # Layout
 //!
@@ -32,13 +36,19 @@
 //!
 //! # Security notes
 //!
+//! Every absorb lane that does not receive a real input (every unused rate
+//! lane and always the capacity lane, index 3) is constrained to the field
+//! zero. The capacity **state** is not constrained; only the absorbed addend
+//! is. Without this a prover could choose a non-zero capacity/padding addend
+//! and prove a different function over the same public inputs.
+//!
 //! This is a demonstration circuit, not an audited generic frontend. The
 //! Poseidon2 parameters and their provenance are unchanged from
 //! [`crate::poseidon2`]; see `docs/poseidon2-halo2-gate.md`.
 
 use crate::poseidon2::{
-    POSEIDON2_BN254_MAX_INPUTS, POSEIDON2_BN254_RATE, POSEIDON2_BN254_WIDTH,
-    constants::BN254_CONFIG,
+    constants::BN254_CONFIG, POSEIDON2_BN254_MAX_INPUTS, POSEIDON2_BN254_RATE,
+    POSEIDON2_BN254_WIDTH,
 };
 use ark_ff::PrimeField as ArkPrimeField;
 use halo2_axiom::circuit::{Cell, Layouter, Region, SimpleFloorPlanner, Value};
@@ -354,7 +364,7 @@ fn external_matrix_expr(state: [Expression<Fr>; 4]) -> [Expression<Fr>; 4] {
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Configuration shared by both Poseidon2 Halo2 circuits.
+/// Configuration shared by the Poseidon2 Halo2 circuits and [`Poseidon2Chip`].
 #[derive(Clone, Debug)]
 pub struct Poseidon2Halo2Config {
     state: [Column<Advice>; 4],
@@ -525,6 +535,328 @@ fn configure_poseidon2(meta: &mut ConstraintSystem<Fr>) -> Poseidon2Halo2Config 
     }
 }
 
+impl Poseidon2Halo2Config {
+    /// The instance column created by [`Poseidon2Chip::configure`].
+    ///
+    /// The chip itself never constrains a value to this column: callers decide
+    /// which output/input cells (if any) to expose.
+    pub fn instance_column(&self) -> Column<Instance> {
+        self.instance
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reusable chip
+// ---------------------------------------------------------------------------
+
+/// One already-assigned Poseidon2 lane handed to [`Poseidon2Chip`].
+///
+/// `cell` is copy-constrained into the chip's absorb/input column, and `value`
+/// must be the value already assigned to that cell (or [`Value::unknown()`]
+/// during key generation). The pair keeps the witness and the constraint in
+/// sync without re-assigning the caller's cell.
+#[derive(Clone, Copy, Debug)]
+pub struct Poseidon2Input {
+    /// Caller-owned cell that is copied into the sponge/permutation.
+    pub cell: Cell,
+    /// Value assigned to `cell`.
+    pub value: Value<Fr>,
+}
+
+/// Internal sponge assignment policy.
+///
+/// Production code always uses [`SpongeAssignment::strict`]. The remaining
+/// fields are module-private escape hatches used only by the test suite to
+/// show *which* constraint rejects a malicious witness; they are not part of
+/// the public API.
+#[derive(Clone, Debug)]
+struct SpongeAssignment {
+    /// Constrain every absorb lane at or after the block's `absorbed` count to
+    /// the field zero. This is the soundness fix for the sponge.
+    constrain_unused_absorb: bool,
+    /// Copy-constrain each later block's `prev` state to the previous output.
+    prev_binding: bool,
+    /// Bind the first block's `prev` state (the length IV) to a constant.
+    iv_binding: bool,
+    /// Optional witness tamper (tests only).
+    tamper: Option<SpongeTamper>,
+}
+
+impl SpongeAssignment {
+    /// The only policy used by production circuits.
+    const fn strict() -> Self {
+        Self {
+            constrain_unused_absorb: true,
+            prev_binding: true,
+            iv_binding: true,
+            tamper: None,
+        }
+    }
+}
+
+/// Test-only witness tamper applied after the honest sponge witness has been
+/// computed. The affected block and every later block are recomputed from the
+/// tampered value.
+#[allow(dead_code)] // variants are constructed only by the test suite
+#[derive(Clone, Copy, Debug)]
+enum SpongeTamper {
+    /// Replace one absorb lane of `block` (used to inject a non-zero unused
+    /// rate/capacity lane).
+    Absorb {
+        block: usize,
+        lane: usize,
+        value: Fr,
+    },
+    /// Replace one `prev` lane of `block` (used to attack the inter-block
+    /// state copy).
+    Prev {
+        block: usize,
+        lane: usize,
+        value: Fr,
+    },
+    /// Replace the length IV in block 0 (used to attack the constant binding).
+    Iv(Fr),
+}
+
+/// Zips four per-lane values into one array value.
+fn value4(values: [Value<Fr>; 4]) -> Value<[Fr; 4]> {
+    values[0]
+        .zip(values[1])
+        .zip(values[2])
+        .zip(values[3])
+        .map(|(((a, b), c), d)| [a, b, c, d])
+}
+
+/// Recomputes `input`/`trace` for `blocks[start..]` from the (possibly
+/// tampered) `prev`/`absorb` values. Every later block's `prev` is refreshed
+/// from the previous permutation output, so the whole chain stays internally
+/// consistent with the injected witness.
+fn recompute_sponge_from(blocks: &mut [SpongeBlockWitness], start: usize) {
+    let Some(first) = blocks.get(start) else {
+        return;
+    };
+    let mut state = first.prev;
+    for block in &mut blocks[start..] {
+        block.prev = state;
+        let mut input = state;
+        for (value, absorbed) in input.iter_mut().zip(block.absorb.iter()) {
+            *value += *absorbed;
+        }
+        block.input = input;
+        block.trace = permutation_trace(input);
+        state = block.trace[POSEIDON2_HALO2_ROUNDS];
+    }
+}
+
+fn apply_sponge_tamper(blocks: &mut [SpongeBlockWitness], tamper: SpongeTamper) {
+    match tamper {
+        SpongeTamper::Absorb { block, lane, value } => {
+            if let Some(entry) = blocks.get_mut(block) {
+                if let Some(lane) = entry.absorb.get_mut(lane) {
+                    *lane = value;
+                }
+            }
+            recompute_sponge_from(blocks, block);
+        }
+        SpongeTamper::Prev { block, lane, value } => {
+            if let Some(entry) = blocks.get_mut(block) {
+                if let Some(lane) = entry.prev.get_mut(lane) {
+                    *lane = value;
+                }
+            }
+            recompute_sponge_from(blocks, block);
+        }
+        SpongeTamper::Iv(value) => {
+            if let Some(entry) = blocks.first_mut() {
+                entry.prev[3] = value;
+            }
+            recompute_sponge_from(blocks, 0);
+        }
+    }
+}
+
+/// Builds the `prev` binding for the first sponge block.
+fn first_prev_binding(iv: Fr, options: &SpongeAssignment) -> PrevBinding {
+    let mut constants = [Fr::from(0u64); 4];
+    constants[3] = iv;
+    match options.tamper {
+        Some(SpongeTamper::Iv(witness)) => {
+            let mut witness_values = [Fr::from(0u64); 4];
+            witness_values[3] = witness;
+            if options.iv_binding {
+                PrevBinding::FirstBound {
+                    witness: witness_values,
+                    constant: constants,
+                }
+            } else {
+                PrevBinding::First(witness_values)
+            }
+        }
+        _ => PrevBinding::First(constants),
+    }
+}
+
+/// Reusable Poseidon2 sponge/permutation chip.
+///
+/// The chip owns the same gates and constraints as [`Poseidon2HashCircuit`],
+/// but takes already-assigned [`Poseidon2Input`] cells instead of publishing
+/// them. It never touches the instance column, so callers can keep preimages
+/// private and expose only the digest (or any other derived cell) themselves.
+#[derive(Clone, Debug)]
+pub struct Poseidon2Chip {
+    config: Poseidon2Halo2Config,
+}
+
+impl Poseidon2Chip {
+    /// Configures the shared Poseidon2 gates and returns the config.
+    ///
+    /// The returned config must be handed to [`Poseidon2Chip::new`] during
+    /// synthesis.
+    pub fn configure(meta: &mut ConstraintSystem<Fr>) -> Poseidon2Halo2Config {
+        configure_poseidon2(meta)
+    }
+
+    /// Builds a chip from a config returned by [`Poseidon2Chip::configure`].
+    pub fn new(config: Poseidon2Halo2Config) -> Self {
+        Self { config }
+    }
+
+    /// Returns the underlying configuration.
+    pub fn config(&self) -> &Poseidon2Halo2Config {
+        &self.config
+    }
+
+    /// Constrains the Noir/Barretenberg sponge over `inputs`.
+    ///
+    /// `inputs.len()` must be `0..=12` and is fixed for the circuit layout.
+    /// Each input cell is copy-constrained into the absorb lane; every unused
+    /// rate lane and the capacity lane are constrained to zero. The returned
+    /// cells are the final state: the digest is `state[0]`.
+    pub fn hash(
+        &self,
+        region: &mut Region<'_, Fr>,
+        base: usize,
+        inputs: &[Poseidon2Input],
+    ) -> Result<[Cell; 4], Error> {
+        self.hash_with_options(region, base, inputs, SpongeAssignment::strict())
+    }
+
+    /// Constrains one width-4 permutation over `input` cells.
+    ///
+    /// The four input cells are copy-constrained into the permutation input
+    /// lanes and the final state cells are returned (`state[0]` is digest when
+    /// used as a sponge permutation).
+    pub fn permutation(
+        &self,
+        region: &mut Region<'_, Fr>,
+        base: usize,
+        input: [Poseidon2Input; 4],
+    ) -> Result<[Cell; 4], Error> {
+        let input_value = value4(input.map(|entry| entry.value));
+        let trace = input_value.map(permutation_trace);
+        let block = assign_block(
+            region,
+            &self.config,
+            base,
+            BlockLayout {
+                input: input_value,
+                trace,
+                prev: PrevBinding::Unused,
+                absorb: Value::known([Fr::from(0u64); 4]),
+                absorbed: 0,
+                absorb_sources: &[],
+                input_sources: Some(input.map(|entry| entry.cell)),
+                sponge: false,
+                disabled_round: None,
+                constrain_unused_absorb: true,
+            },
+        )?;
+        Ok(block.state[POSEIDON2_HALO2_ROUNDS])
+    }
+
+    /// Shared sponge assignment used by [`Self::hash`] and the test-only
+    /// malicious-witness circuit.
+    fn hash_with_options(
+        &self,
+        region: &mut Region<'_, Fr>,
+        base: usize,
+        inputs: &[Poseidon2Input],
+        options: SpongeAssignment,
+    ) -> Result<[Cell; 4], Error> {
+        let len = inputs.len();
+        if len > POSEIDON2_BN254_MAX_INPUTS {
+            return Err(Error::Synthesis);
+        }
+        let permutations = hash_permutation_count(len);
+        let full = len / POSEIDON2_HALO2_RATE;
+        let remainder = len % POSEIDON2_HALO2_RATE;
+        let iv = length_iv(len);
+        let input_cells: Vec<Cell> = inputs.iter().map(|input| input.cell).collect();
+
+        let values: Value<Vec<Fr>> = inputs.iter().map(|input| input.value).collect();
+        let blocks = values.map(|values| sponge_witnesses(&values));
+        let blocks = blocks.map(|mut blocks| {
+            if let Some(tamper) = options.tamper {
+                apply_sponge_tamper(&mut blocks, tamper);
+            }
+            blocks
+        });
+        let blocks = blocks.as_ref();
+
+        let mut previous_output: Option<[Cell; 4]> = None;
+        let mut digest: Option<[Cell; 4]> = None;
+
+        for block_index in 0..permutations {
+            // `blocks` is built from the same `len` as `permutations`, so the
+            // index is always in range on the production path.
+            let block = blocks.map(|blocks| &blocks[block_index]);
+            let block_base = base + block_index * POSEIDON2_HALO2_PERMUTATION_ROWS;
+            let absorbed = if block_index < full {
+                POSEIDON2_HALO2_RATE
+            } else {
+                remainder
+            };
+            let input_offset = block_index * POSEIDON2_HALO2_RATE;
+            let absorb_sources = input_cells
+                .get(input_offset..input_offset + absorbed)
+                .ok_or(Error::Synthesis)?;
+
+            let prev = if block_index == 0 {
+                first_prev_binding(iv, &options)
+            } else {
+                PrevBinding::Copied {
+                    values: block.map(|block| block.prev),
+                    cells: previous_output.ok_or(Error::Synthesis)?,
+                    bind: options.prev_binding,
+                }
+            };
+
+            let assigned = assign_block(
+                region,
+                &self.config,
+                block_base,
+                BlockLayout {
+                    input: block.map(|block| block.input),
+                    trace: block.map(|block| block.trace.clone()),
+                    prev,
+                    absorb: block.map(|block| block.absorb),
+                    absorbed,
+                    absorb_sources,
+                    input_sources: None,
+                    sponge: true,
+                    disabled_round: None,
+                    constrain_unused_absorb: options.constrain_unused_absorb,
+                },
+            )?;
+
+            previous_output = Some(assigned.state[POSEIDON2_HALO2_ROUNDS]);
+            digest = previous_output;
+        }
+
+        digest.ok_or(Error::Synthesis)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Block assignment
 // ---------------------------------------------------------------------------
@@ -541,31 +873,65 @@ enum PrevBinding {
     Unused,
     /// First sponge block: `prev` cells are constants (the length IV state).
     First([Fr; 4]),
+    /// First sponge block with an explicit witness that is still bound to the
+    /// constant. Test-only: the honest path uses [`PrevBinding::First`].
+    FirstBound { witness: [Fr; 4], constant: [Fr; 4] },
     /// Later sponge block: copy `prev` from the previous permutation output.
     Copied {
         values: Value<[Fr; 4]>,
         cells: [Cell; 4],
+        /// Whether to create the copy constraint. Production always sets this.
+        bind: bool,
     },
 }
 
 struct BlockCells {
     input: [Cell; 4],
+    /// Absorb cells, kept for the test-only malicious-witness path.
+    #[allow(dead_code)]
     absorb: [Cell; 4],
     state: Vec<[Cell; 4]>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn assign_block(
-    region: &mut Region<'_, Fr>,
-    config: &Poseidon2Halo2Config,
-    base: usize,
+struct BlockLayout<'a> {
     input: Value<[Fr; 4]>,
     trace: Value<Vec<[Fr; 4]>>,
     prev: PrevBinding,
     absorb: Value<[Fr; 4]>,
+    /// Number of rate lanes actually absorbed (`0..=3`).
+    absorbed: usize,
+    /// Caller cells copied into the absorbed lanes.
+    absorb_sources: &'a [Cell],
+    /// Caller cells copied into the permutation input lanes.
+    input_sources: Option<[Cell; 4]>,
     sponge: bool,
     disabled_round: Option<usize>,
+    /// Whether absorb lanes at or after `absorbed` are constrained to zero.
+    constrain_unused_absorb: bool,
+}
+
+fn assign_block(
+    region: &mut Region<'_, Fr>,
+    config: &Poseidon2Halo2Config,
+    base: usize,
+    layout: BlockLayout<'_>,
 ) -> Result<BlockCells, Error> {
+    let BlockLayout {
+        input,
+        trace,
+        prev,
+        absorb,
+        absorbed,
+        absorb_sources,
+        input_sources,
+        sponge,
+        disabled_round,
+        constrain_unused_absorb,
+    } = layout;
+
+    if sponge && absorbed > 4 {
+        return Err(Error::Synthesis);
+    }
     // Per-round constants as fixed columns (part of the verifying key).
     for round in 0..POSEIDON2_HALO2_ROUNDS {
         for (index, column) in config.round_constant.iter().enumerate() {
@@ -599,6 +965,12 @@ fn assign_block(
             .cell()
     });
 
+    if let Some(sources) = input_sources {
+        for i in 0..4 {
+            region.constrain_equal(input_cells[i], sources[i]);
+        }
+    }
+
     let absorb_cells = core::array::from_fn(|i| {
         region
             .assign_advice(
@@ -610,6 +982,19 @@ fn assign_block(
     });
 
     if sponge {
+        for i in 0..4 {
+            if i < absorbed {
+                let source = absorb_sources.get(i).ok_or(Error::Synthesis)?;
+                region.constrain_equal(absorb_cells[i], *source);
+            } else if constrain_unused_absorb {
+                // Every lane not filled by a real input (including the
+                // capacity lane, index 3) must absorb exactly zero. Without
+                // this the prover could pick an arbitrary addend and prove a
+                // different function over the same public inputs.
+                region.constrain_constant(absorb_cells[i], Fr::from(0u64))?;
+            }
+        }
+
         match prev {
             PrevBinding::Unused => {}
             PrevBinding::First(values) => {
@@ -622,7 +1007,19 @@ fn assign_block(
                     )?;
                 }
             }
-            PrevBinding::Copied { values, cells } => {
+            PrevBinding::FirstBound { witness, constant } => {
+                for i in 0..4 {
+                    let cell = region
+                        .assign_advice(config.prev[i], base, Value::known(witness[i]))
+                        .cell();
+                    region.constrain_constant(cell, constant[i])?;
+                }
+            }
+            PrevBinding::Copied {
+                values,
+                cells,
+                bind,
+            } => {
                 for i in 0..4 {
                     let cell = region
                         .assign_advice(
@@ -631,7 +1028,9 @@ fn assign_block(
                             values.map(|state| Assigned::from(state[i])),
                         )
                         .cell();
-                    region.constrain_equal(cell, cells[i]);
+                    if bind {
+                        region.constrain_equal(cell, cells[i]);
+                    }
                 }
             }
         }
@@ -756,12 +1155,18 @@ impl Circuit<Fr> for Poseidon2PermutationCircuit {
                     &mut region,
                     &config,
                     0,
-                    self.input,
-                    trace,
-                    PrevBinding::Unused,
-                    Value::known([Fr::from(0u64); 4]),
-                    false,
-                    self.disabled_round,
+                    BlockLayout {
+                        input: self.input,
+                        trace,
+                        prev: PrevBinding::Unused,
+                        absorb: Value::known([Fr::from(0u64); 4]),
+                        absorbed: 0,
+                        absorb_sources: &[],
+                        input_sources: None,
+                        sponge: false,
+                        disabled_round: self.disabled_round,
+                        constrain_unused_absorb: true,
+                    },
                 )
             },
         )?;
@@ -826,72 +1231,37 @@ impl Circuit<Fr> for Poseidon2HashCircuit {
             return Err(Error::Synthesis);
         }
 
+        // The standalone hash circuit is a thin safe wrapper around the
+        // reusable chip: the raw inputs are assigned as advice cells, the chip
+        // copy-constrains them into the sponge, and only the digest and the
+        // raw inputs are exposed to the instance column.
+        let chip = Poseidon2Chip::new(config.clone());
         let values: Value<Vec<Fr>> = self.inputs.iter().copied().collect();
-        let blocks = values.as_ref().map(|inputs| sponge_witnesses(inputs));
-        let permutations = hash_permutation_count(len);
-        let full = len / POSEIDON2_HALO2_RATE;
-        let remainder = len % POSEIDON2_HALO2_RATE;
-        let iv = length_iv(len);
 
         let (raw_cells, digest_cells) = layouter.assign_region(
             || "poseidon2 hash",
             |mut region| {
                 let values_ref = values.as_ref();
-                let raw_cells: Vec<Cell> = (0..len)
-                    .map(|index| {
-                        region
-                            .assign_advice(
-                                config.raw,
-                                index,
-                                values_ref.map(|values| Assigned::from(values[index])),
-                            )
-                            .cell()
-                    })
-                    .collect();
+                let mut inputs = Vec::with_capacity(len);
+                let mut raw_cells = Vec::with_capacity(len);
 
-                let blocks_ref = blocks.as_ref();
-                let mut previous_output: Option<[Cell; 4]> = None;
-                let mut digest_cells: Option<[Cell; 4]> = None;
-
-                for block_index in 0..permutations {
-                    let block = blocks_ref.map(|blocks| &blocks[block_index]);
-                    let base = block_index * POSEIDON2_HALO2_PERMUTATION_ROWS;
-                    let prev = if block_index == 0 {
-                        PrevBinding::First([Fr::from(0u64), Fr::from(0u64), Fr::from(0u64), iv])
-                    } else {
-                        PrevBinding::Copied {
-                            values: block.map(|block| block.prev),
-                            cells: previous_output.ok_or(Error::Synthesis)?,
-                        }
-                    };
-
-                    let assigned = assign_block(
-                        &mut region,
-                        &config,
-                        base,
-                        block.map(|block| block.input),
-                        block.map(|block| block.trace.clone()),
-                        prev,
-                        block.map(|block| block.absorb),
-                        true,
-                        None,
-                    )?;
-
-                    // Bind absorbed inputs to the raw public input cells.
-                    let absorbed = if block_index < full {
-                        (block_index * POSEIDON2_HALO2_RATE, POSEIDON2_HALO2_RATE)
-                    } else {
-                        (full * POSEIDON2_HALO2_RATE, remainder)
-                    };
-                    for i in 0..absorbed.1 {
-                        region.constrain_equal(assigned.absorb[i], raw_cells[absorbed.0 + i]);
-                    }
-
-                    previous_output = Some(assigned.state[POSEIDON2_HALO2_ROUNDS]);
-                    digest_cells = Some(assigned.state[POSEIDON2_HALO2_ROUNDS]);
+                for index in 0..len {
+                    let cell = region
+                        .assign_advice(
+                            config.raw,
+                            index,
+                            values_ref.map(|values| Assigned::from(values[index])),
+                        )
+                        .cell();
+                    raw_cells.push(cell);
+                    inputs.push(Poseidon2Input {
+                        cell,
+                        value: self.inputs[index],
+                    });
                 }
 
-                Ok((raw_cells, digest_cells.ok_or(Error::Synthesis)?))
+                let digest = chip.hash(&mut region, 0, &inputs)?;
+                Ok((raw_cells, digest))
             },
         )?;
 
@@ -949,6 +1319,404 @@ mod tests {
         instance: Vec<Fr>,
     ) -> MockProver<Fr> {
         MockProver::run(PERMUTATION_K, circuit, vec![instance]).expect("mock prover run")
+    }
+
+    // ------------------------------------------------------------------
+    // Test-only witness paths
+    // ------------------------------------------------------------------
+
+    fn options(tamper: Option<SpongeTamper>, constrain_unused_absorb: bool) -> SpongeAssignment {
+        SpongeAssignment {
+            constrain_unused_absorb,
+            prev_binding: true,
+            iv_binding: true,
+            tamper,
+        }
+    }
+
+    fn raw_k(rows: usize, instance_len: usize) -> u32 {
+        minimum_k(rows).max(minimum_k(instance_len))
+    }
+
+    /// Digest of the malicious witness, computed from the same tampered sponge
+    /// trace the circuit assigns (not from `hash_output` of the honest inputs).
+    fn tampered_digest(inputs: &[Fr], tamper: SpongeTamper) -> Fr {
+        let mut blocks = sponge_witnesses(inputs);
+        apply_sponge_tamper(&mut blocks, tamper);
+        match blocks.last() {
+            Some(block) => block.trace[POSEIDON2_HALO2_ROUNDS][0],
+            None => Fr::from(0u64),
+        }
+    }
+
+    /// Directly assigns a (possibly tampered) sponge witness. This bypasses
+    /// `hash_output`/`hash_public_inputs`: the instance digest is the digest the
+    /// malicious witness actually commits to.
+    #[derive(Clone, Debug)]
+    struct RawHashCircuit {
+        inputs: Vec<Fr>,
+        options: SpongeAssignment,
+        publish_inputs: bool,
+    }
+
+    impl Circuit<Fr> for RawHashCircuit {
+        type Config = Poseidon2Halo2Config;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            Poseidon2Chip::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            let chip = Poseidon2Chip::new(config.clone());
+            let inputs_values = self.inputs.clone();
+            let options = self.options.clone();
+
+            let (raw_cells, digest) = layouter.assign_region(
+                || "raw poseidon2 hash",
+                |mut region| {
+                    let mut cells = Vec::with_capacity(inputs_values.len());
+                    let mut inputs = Vec::with_capacity(inputs_values.len());
+                    for (index, value) in inputs_values.iter().enumerate() {
+                        let cell = region
+                            .assign_advice(config.raw, index, Value::known(Assigned::from(*value)))
+                            .cell();
+                        cells.push(cell);
+                        inputs.push(Poseidon2Input {
+                            cell,
+                            value: Value::known(*value),
+                        });
+                    }
+                    let digest = chip.hash_with_options(&mut region, 0, &inputs, options)?;
+                    Ok((cells, digest))
+                },
+            )?;
+
+            layouter.constrain_instance(digest[0], config.instance, 0);
+            if self.publish_inputs {
+                for (index, cell) in raw_cells.iter().enumerate() {
+                    layouter.constrain_instance(*cell, config.instance, 1 + index);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn run_raw(circuit: &RawHashCircuit, instance: Vec<Fr>) -> MockProver<Fr> {
+        let k = raw_k(hash_circuit_rows(circuit.inputs.len()), instance.len());
+        MockProver::run(k, circuit, vec![instance]).expect("mock prover run")
+    }
+
+    /// Two or more independent chip hashes placed in one region/circuit.
+    #[derive(Clone, Debug, Default)]
+    struct RepeatedChipCircuit {
+        hashes: Vec<Vec<Fr>>,
+    }
+
+    impl Circuit<Fr> for RepeatedChipCircuit {
+        type Config = Poseidon2Halo2Config;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            Poseidon2Chip::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            let chip = Poseidon2Chip::new(config.clone());
+            let digests = layouter.assign_region(
+                || "repeated poseidon2 chip",
+                |mut region| {
+                    let mut digests = Vec::with_capacity(self.hashes.len());
+                    let mut base = 0usize;
+                    for values in &self.hashes {
+                        let mut inputs = Vec::with_capacity(values.len());
+                        for (index, value) in values.iter().enumerate() {
+                            let cell = region
+                                .assign_advice(
+                                    config.raw,
+                                    base + index,
+                                    Value::known(Assigned::from(*value)),
+                                )
+                                .cell();
+                            inputs.push(Poseidon2Input {
+                                cell,
+                                value: Value::known(*value),
+                            });
+                        }
+                        digests.push(chip.hash(&mut region, base, &inputs)?);
+                        base +=
+                            hash_permutation_count(values.len()) * POSEIDON2_HALO2_PERMUTATION_ROWS;
+                    }
+                    Ok(digests)
+                },
+            )?;
+
+            for (index, digest) in digests.iter().enumerate() {
+                layouter.constrain_instance(digest[0], config.instance, index);
+            }
+            Ok(())
+        }
+    }
+
+    /// `h2 = Poseidon2(h1[0] || tail)` with `h1 = Poseidon2(first)`.
+    #[derive(Clone, Debug, Default)]
+    struct ChainedChipCircuit {
+        first: Vec<Fr>,
+        tail: Vec<Fr>,
+    }
+
+    impl Circuit<Fr> for ChainedChipCircuit {
+        type Config = Poseidon2Halo2Config;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            Poseidon2Chip::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            let chip = Poseidon2Chip::new(config.clone());
+            let first_value = hash_output(&self.first);
+            let (first_digest, chained_digest) = layouter.assign_region(
+                || "chained poseidon2 chip",
+                |mut region| {
+                    let mut first_inputs = Vec::with_capacity(self.first.len());
+                    for (index, value) in self.first.iter().enumerate() {
+                        let cell = region
+                            .assign_advice(config.raw, index, Value::known(Assigned::from(*value)))
+                            .cell();
+                        first_inputs.push(Poseidon2Input {
+                            cell,
+                            value: Value::known(*value),
+                        });
+                    }
+                    let first_digest = chip.hash(&mut region, 0, &first_inputs)?;
+
+                    let base =
+                        hash_permutation_count(self.first.len()) * POSEIDON2_HALO2_PERMUTATION_ROWS;
+                    let mut chained_inputs = Vec::with_capacity(self.tail.len() + 1);
+                    chained_inputs.push(Poseidon2Input {
+                        cell: first_digest[0],
+                        value: Value::known(first_value),
+                    });
+                    for (index, value) in self.tail.iter().enumerate() {
+                        let cell = region
+                            .assign_advice(
+                                config.raw,
+                                base + index,
+                                Value::known(Assigned::from(*value)),
+                            )
+                            .cell();
+                        chained_inputs.push(Poseidon2Input {
+                            cell,
+                            value: Value::known(*value),
+                        });
+                    }
+                    let chained_digest = chip.hash(&mut region, base, &chained_inputs)?;
+                    Ok((first_digest, chained_digest))
+                },
+            )?;
+
+            layouter.constrain_instance(chained_digest[0], config.instance, 0);
+            layouter.constrain_instance(first_digest[0], config.instance, 1);
+            Ok(())
+        }
+    }
+
+    /// Public inputs come from the instance column, private inputs from the
+    /// witness; only the digest is exposed publicly.
+    #[derive(Clone, Debug, Default)]
+    struct MixedChipCircuit {
+        public: Vec<Fr>,
+        private: Vec<Fr>,
+    }
+
+    impl Circuit<Fr> for MixedChipCircuit {
+        type Config = Poseidon2Halo2Config;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            Poseidon2Chip::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            let chip = Poseidon2Chip::new(config.clone());
+            let digest = layouter.assign_region(
+                || "mixed poseidon2 chip",
+                |mut region| {
+                    let mut inputs = Vec::with_capacity(self.public.len() + self.private.len());
+                    for (index, _) in self.public.iter().enumerate() {
+                        let assigned = region.assign_advice_from_instance(
+                            || format!("poseidon2 public input {index}"),
+                            config.instance,
+                            1 + index,
+                            config.raw,
+                            index,
+                        )?;
+                        inputs.push(Poseidon2Input {
+                            cell: assigned.cell(),
+                            value: assigned.value().copied(),
+                        });
+                    }
+                    for (index, value) in self.private.iter().enumerate() {
+                        let row = self.public.len() + index;
+                        let cell = region
+                            .assign_advice(config.raw, row, Value::known(Assigned::from(*value)))
+                            .cell();
+                        inputs.push(Poseidon2Input {
+                            cell,
+                            value: Value::known(*value),
+                        });
+                    }
+                    chip.hash(&mut region, 0, &inputs)
+                },
+            )?;
+
+            layouter.constrain_instance(digest[0], config.instance, 0);
+            Ok(())
+        }
+    }
+
+    /// Uses [`Poseidon2Chip::permutation`] with private input cells and exposes
+    /// only the output state.
+    #[derive(Clone, Debug, Default)]
+    struct ChipPermutationCircuit {
+        input: [Fr; 4],
+    }
+
+    impl Circuit<Fr> for ChipPermutationCircuit {
+        type Config = Poseidon2Halo2Config;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            Poseidon2Chip::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            let chip = Poseidon2Chip::new(config.clone());
+            let output = layouter.assign_region(
+                || "chip permutation",
+                |mut region| {
+                    let inputs = core::array::from_fn(|index| {
+                        let cell = region
+                            .assign_advice(
+                                config.raw,
+                                index,
+                                Value::known(Assigned::from(self.input[index])),
+                            )
+                            .cell();
+                        Poseidon2Input {
+                            cell,
+                            value: Value::known(self.input[index]),
+                        }
+                    });
+                    chip.permutation(&mut region, 0, inputs)
+                },
+            )?;
+
+            for (index, cell) in output.iter().enumerate() {
+                layouter.constrain_instance(*cell, config.instance, index);
+            }
+            Ok(())
+        }
+    }
+
+    /// Binds a private "claimed digest" cell to the chip's computed digest.
+    #[derive(Clone, Debug, Default)]
+    struct ClaimedDigestCircuit {
+        inputs: Vec<Fr>,
+        claimed: Fr,
+    }
+
+    impl Circuit<Fr> for ClaimedDigestCircuit {
+        type Config = Poseidon2Halo2Config;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fr>) -> Self::Config {
+            Poseidon2Chip::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fr>,
+        ) -> Result<(), Error> {
+            let chip = Poseidon2Chip::new(config.clone());
+            layouter.assign_region(
+                || "claimed poseidon2 digest",
+                |mut region| {
+                    let mut inputs = Vec::with_capacity(self.inputs.len());
+                    for (index, value) in self.inputs.iter().enumerate() {
+                        let cell = region
+                            .assign_advice(config.raw, index, Value::known(Assigned::from(*value)))
+                            .cell();
+                        inputs.push(Poseidon2Input {
+                            cell,
+                            value: Value::known(*value),
+                        });
+                    }
+                    let digest = chip.hash(&mut region, 0, &inputs)?;
+                    let claimed = region
+                        .assign_advice(
+                            config.raw,
+                            self.inputs.len(),
+                            Value::known(Assigned::from(self.claimed)),
+                        )
+                        .cell();
+                    region.constrain_equal(claimed, digest[0]);
+                    Ok(())
+                },
+            )
+        }
     }
 
     #[test]
@@ -1119,7 +1887,7 @@ mod tests {
 
     #[test]
     fn hash_kat_matches_native_for_supported_arities() {
-        for n in [0usize, 1, 2, 3, 4, 6, 8, 9, 12] {
+        for n in 0..=POSEIDON2_BN254_MAX_INPUTS {
             let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
             let expected = halo_fr(crate::poseidon2::poseidon2_bn254_hash_impl(&ark_inputs(
                 &inputs,
@@ -1226,6 +1994,311 @@ mod tests {
         // Every supported arity fits in k = 10, the example's default.
         for n in 0..=POSEIDON2_BN254_MAX_INPUTS {
             assert!(minimum_k(hash_circuit_rows(n)) <= HASH_K);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Malicious-witness negative tests (Goal 2)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn every_unused_absorb_lane_is_constrained_to_zero() {
+        for n in 0..=POSEIDON2_BN254_MAX_INPUTS {
+            let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
+            let full = n / POSEIDON2_HALO2_RATE;
+            let remainder = n % POSEIDON2_HALO2_RATE;
+            let permutations = hash_permutation_count(n);
+            let honest = hash_output(&inputs);
+
+            for block in 0..permutations {
+                let absorbed = if block < full {
+                    POSEIDON2_HALO2_RATE
+                } else {
+                    remainder
+                };
+                for lane in absorbed..4 {
+                    let value = Fr::from(0xdead_beefu64) + Fr::from(block as u64 * 4 + lane as u64);
+                    let tamper = SpongeTamper::Absorb { block, lane, value };
+                    let malicious = tampered_digest(&inputs, tamper);
+                    assert_ne!(
+                        malicious, honest,
+                        "tampered digest equals honest digest n={n} block={block} lane={lane}"
+                    );
+
+                    let mut instance = vec![malicious];
+                    instance.extend_from_slice(&inputs);
+
+                    // The new zero constraint must reject the malicious
+                    // witness even though every other gate and the instance
+                    // digest agree with it.
+                    let constrained = RawHashCircuit {
+                        inputs: inputs.clone(),
+                        options: options(Some(tamper), true),
+                        publish_inputs: true,
+                    };
+                    let prover = run_raw(&constrained, instance.clone());
+                    assert!(
+                        prover.verify().is_err(),
+                        "tampered absorb accepted with zero constraint n={n} block={block} lane={lane}"
+                    );
+
+                    // With only that constraint disabled the very same
+                    // recomputed witness is satisfied, proving the rejection
+                    // came from the new constraint.
+                    let unconstrained = RawHashCircuit {
+                        inputs: inputs.clone(),
+                        options: options(Some(tamper), false),
+                        publish_inputs: true,
+                    };
+                    let prover = run_raw(&unconstrained, instance);
+                    prover.assert_satisfied();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn malicious_digest_is_not_accepted_as_the_correct_function() {
+        for n in [0usize, 1, 3, 4, 6, 9, 12] {
+            let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
+            let full = n / POSEIDON2_HALO2_RATE;
+            let remainder = n % POSEIDON2_HALO2_RATE;
+            let tamper = SpongeTamper::Absorb {
+                block: 0,
+                lane: if full == 0 {
+                    remainder
+                } else {
+                    POSEIDON2_HALO2_RATE
+                },
+                value: Fr::from(7u64),
+            };
+            let malicious = tampered_digest(&inputs, tamper);
+            assert_ne!(malicious, hash_output(&inputs));
+
+            // The honest witness cannot be paired with the malicious digest.
+            let honest = RawHashCircuit {
+                inputs: inputs.clone(),
+                options: SpongeAssignment::strict(),
+                publish_inputs: true,
+            };
+            let mut instance = vec![malicious];
+            instance.extend_from_slice(&inputs);
+            assert!(run_raw(&honest, instance).verify().is_err());
+
+            // The malicious witness with the true digest is rejected too,
+            // because its own digest is the one it commits to.
+            let tampered = RawHashCircuit {
+                inputs: inputs.clone(),
+                options: options(Some(tamper), true),
+                publish_inputs: true,
+            };
+            assert!(run_raw(&tampered, hash_public_inputs(&inputs))
+                .verify()
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn inter_block_prev_copy_cannot_be_altered() {
+        for n in [4usize, 6, 9, 12] {
+            let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
+            let tamper = SpongeTamper::Prev {
+                block: 1,
+                lane: 2,
+                value: Fr::from(0x1234_5678u64),
+            };
+            let malicious = tampered_digest(&inputs, tamper);
+            assert_ne!(malicious, hash_output(&inputs));
+            let mut instance = vec![malicious];
+            instance.extend_from_slice(&inputs);
+
+            let mut bound = options(Some(tamper), true);
+            bound.prev_binding = true;
+            let circuit = RawHashCircuit {
+                inputs: inputs.clone(),
+                options: bound,
+                publish_inputs: true,
+            };
+            assert!(
+                run_raw(&circuit, instance.clone()).verify().is_err(),
+                "tampered prev accepted n={n}"
+            );
+
+            let mut unbound = options(Some(tamper), true);
+            unbound.prev_binding = false;
+            let circuit = RawHashCircuit {
+                inputs: inputs.clone(),
+                options: unbound,
+                publish_inputs: true,
+            };
+            run_raw(&circuit, instance).assert_satisfied();
+        }
+    }
+
+    #[test]
+    fn length_iv_cannot_be_altered() {
+        for n in [0usize, 1, 3, 4, 6, 9, 12] {
+            let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
+            let tamper = SpongeTamper::Iv(length_iv(n) + Fr::from(1u64));
+            let malicious = tampered_digest(&inputs, tamper);
+            assert_ne!(malicious, hash_output(&inputs));
+            let mut instance = vec![malicious];
+            instance.extend_from_slice(&inputs);
+
+            let mut bound = options(Some(tamper), true);
+            bound.iv_binding = true;
+            let circuit = RawHashCircuit {
+                inputs: inputs.clone(),
+                options: bound,
+                publish_inputs: true,
+            };
+            assert!(
+                run_raw(&circuit, instance.clone()).verify().is_err(),
+                "tampered IV accepted n={n}"
+            );
+
+            let mut unbound = options(Some(tamper), true);
+            unbound.iv_binding = false;
+            let circuit = RawHashCircuit {
+                inputs: inputs.clone(),
+                options: unbound,
+                publish_inputs: true,
+            };
+            run_raw(&circuit, instance).assert_satisfied();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Reusable chip tests (Goal 3)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn chip_hash_can_publish_only_the_digest() {
+        for n in [0usize, 1, 2, 3, 4, 6, 9, 12] {
+            let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
+            let circuit = RawHashCircuit {
+                inputs: inputs.clone(),
+                options: SpongeAssignment::strict(),
+                publish_inputs: false,
+            };
+            let prover = run_raw(&circuit, vec![hash_output(&inputs)]);
+            prover.assert_satisfied();
+        }
+    }
+
+    #[test]
+    fn chip_can_be_reused_in_one_region() {
+        let hashes = vec![
+            vec![Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)],
+            vec![Fr::from(4u64), Fr::from(5u64)],
+            vec![],
+        ];
+        let instance: Vec<Fr> = hashes.iter().map(|inputs| hash_output(inputs)).collect();
+        let rows: usize = hashes
+            .iter()
+            .map(|inputs| hash_permutation_count(inputs.len()) * POSEIDON2_HALO2_PERMUTATION_ROWS)
+            .sum();
+        let circuit = RepeatedChipCircuit { hashes };
+        let k = raw_k(rows, instance.len());
+        let prover = MockProver::run(k, &circuit, vec![instance]).expect("mock prover run");
+        prover.assert_satisfied();
+    }
+
+    #[test]
+    fn chip_supports_chained_hashes() {
+        let first = vec![Fr::from(1u64), Fr::from(2u64)];
+        let tail = vec![Fr::from(3u64), Fr::from(4u64), Fr::from(5u64)];
+        let first_digest = hash_output(&first);
+        let mut chained_inputs = vec![first_digest];
+        chained_inputs.extend_from_slice(&tail);
+        let chained_digest = hash_output(&chained_inputs);
+
+        let rows = hash_circuit_rows(first.len()) + hash_circuit_rows(tail.len() + 1);
+        let circuit = ChainedChipCircuit { first, tail };
+        let k = raw_k(rows, 2);
+        let prover = MockProver::run(k, &circuit, vec![vec![chained_digest, first_digest]])
+            .expect("mock prover run");
+        prover.assert_satisfied();
+    }
+
+    #[test]
+    fn chip_supports_public_and_private_inputs() {
+        let public = vec![Fr::from(11u64), Fr::from(12u64)];
+        let private = vec![Fr::from(13u64), Fr::from(14u64)];
+        let mut all = public.clone();
+        all.extend_from_slice(&private);
+        let digest = hash_output(&all);
+        let mut instance = vec![digest];
+        instance.extend_from_slice(&public);
+
+        let circuit = MixedChipCircuit { public, private };
+        let k = raw_k(hash_circuit_rows(all.len()), instance.len());
+        let prover = MockProver::run(k, &circuit, vec![instance]).expect("mock prover run");
+        prover.assert_satisfied();
+    }
+
+    #[test]
+    fn chip_digest_cannot_be_substituted() {
+        let inputs: Vec<Fr> = (1..=4u64).map(Fr::from).collect();
+        let digest = hash_output(&inputs);
+        let k = raw_k(hash_circuit_rows(inputs.len()) + 1, 0);
+
+        let honest = ClaimedDigestCircuit {
+            inputs: inputs.clone(),
+            claimed: digest,
+        };
+        let prover = MockProver::run(k, &honest, vec![vec![]]).expect("mock prover run");
+        prover.assert_satisfied();
+
+        let substituted = ClaimedDigestCircuit {
+            inputs,
+            claimed: digest + Fr::from(1u64),
+        };
+        let prover = MockProver::run(k, &substituted, vec![vec![]]).expect("mock prover run");
+        assert!(
+            prover.verify().is_err(),
+            "a host-computed digest was substituted without a constraint failure"
+        );
+    }
+
+    #[test]
+    fn chip_permutation_matches_the_standalone_result() {
+        let input = [
+            Fr::from(1u64),
+            Fr::from(2u64),
+            Fr::from(3u64),
+            Fr::from(4u64),
+        ];
+        let expected = permutation_output(input);
+        let circuit = ChipPermutationCircuit { input };
+        let prover =
+            MockProver::run(PERMUTATION_K, &circuit, vec![expected.to_vec()]).expect("mock prover");
+        prover.assert_satisfied();
+
+        let mut wrong = expected;
+        wrong[0] += Fr::from(1u64);
+        let prover =
+            MockProver::run(PERMUTATION_K, &circuit, vec![wrong.to_vec()]).expect("mock prover");
+        assert!(
+            prover.verify().is_err(),
+            "wrong permutation output accepted"
+        );
+    }
+
+    #[test]
+    fn hash_without_witnesses_keygen_succeeds() {
+        use halo2_axiom::halo2curves::bn256::G1Affine;
+        use halo2_axiom::plonk::keygen_vk;
+        use halo2_axiom::poly::commitment::ParamsProver;
+        use halo2_axiom::poly::ipa::commitment::ParamsIPA;
+
+        let params = ParamsIPA::<G1Affine>::new(7);
+        for n in [0usize, 3] {
+            let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
+            let circuit = Poseidon2HashCircuit::new(&inputs);
+            let vk = keygen_vk(&params, &circuit.without_witnesses())
+                .expect("keygen must not require witnesses");
+            drop(vk);
         }
     }
 }

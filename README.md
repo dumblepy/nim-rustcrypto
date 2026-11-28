@@ -41,7 +41,26 @@ and Poseidon2 hash3 id 2), verify-only ICP canisters with an IPA params cache
 (PocketIC-measured, including circuit id 2 VK pinning but not in-canister
 proving), a registered 3-input Poseidon2 hash circuit (id 2) with arbitrary
 arity `0x100+n`, and a Poseidon2 Halo2 custom-gate `wasm32-wasip1` prove/verify
-run are included. See
+run are included.
+
+> **Poseidon2 artifact revision (V2).** The P0 soundness fix zero-constrains every
+> unused sponge absorb lane and the capacity addend, which changes the Poseidon2
+> VK/PK. Poseidon2 keys now use the V2 envelopes `RCH2IPV2` / `RCH2IPP2`; cubic
+> id 1 keeps V1 `RCH2IPV1` / `RCH2IPP1`, and proof/instances stay `RCH2IPF1` /
+> `RCH2IPI1`. Old V1-magic Poseidon2 artifacts are rejected, so the committed
+> Poseidon2 fixtures and the wasm/browser/ICP results recorded above (measured
+> against the old V1 circuit) must be regenerated and re-run. Do not accept a
+> pinned old VK/proof as the new circuit.
+
+The same profile now exposes a reusable **`Poseidon2Chip`** (pass already-assigned
+cells, copy-constrain them, publish only caller-selected cells) and a compile-time
+**external-circuit adapter** (`rustcrypto-ffi/src/halo2_ipa_registry.rs`) with
+`CircuitProfile` / `ApprovedCircuit`, generic prepare/prove/verify, VK/params
+digest helpers, and the `halo2_ipa_export_circuit!` /
+`halo2_ipa_export_circuit_verifier!` macros. A 17-public-value composite example
+lives in `examples/halo2-ipa-external-circuit/`. Registration is compile-time only;
+there is no runtime circuit descriptor or arbitrary code loading. Everything here
+is still **un-audited**; see
 [Halo2 IPA docs](docs/halo2-ipa.md) and [Poseidon2 docs](docs/poseidon2-bn254.md).
 
 公開鍵による非対話暗号化: [RFC 9180 HPKE Base mode](docs/hpke.md) (`Hpke.generateSecretKey/publicKey/seal/open`)。

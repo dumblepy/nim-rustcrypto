@@ -51,6 +51,11 @@ bash ci/test_poseidon2_halo2_wasm.sh /tmp/poseidon2-halo2-wasm
 
 ## 3. 実測値
 
+> **V2 再計測済み**: 以下は P0 制約健全性修正後の V2 artifact
+> （`RCH2IPV2` / `RCH2IPP2`）で再実行した記録である。KAT digest は V1 と
+> 同じで、未使用 absorb lane の zero 制約により VK/PK は新しい revision に
+> なっている。旧 V1 の fixture / VK は現行実装では拒否される。
+
 環境:
 
 - Ubuntu Linux x86_64
@@ -71,17 +76,17 @@ bash ci/test_poseidon2_halo2_wasm.sh /tmp/poseidon2-halo2-wasm
 | VK bytes（`SerdeFormat::Processed`） | 1,194 |
 | PK bytes（`SerdeFormat::Processed`） | 2,524,654 |
 | proof bytes（transcript） | 5,728 |
-| wasm ファイルサイズ | 9,981,279 bytes |
-| wasm SHA-256 | `358a2ac7fa7fad3cf977fc3d535e1ac93d8afc134377382e1f71b59c89d5e2fe` |
+| wasm ファイルサイズ | 9,989,284 bytes |
+| wasm SHA-256 | `d794216c782183179644289a5ebc539926a193dc70f74b1dbf275ca8fc21da9c` |
 
 1 回の実行例（時間は実行ごとに変動する）:
 
 | 処理 | native | wasm32-wasip1 |
 |---|---:|---:|
-| keygen（params + VK + PK） | 1,127.7 ms | 11,718.5 ms |
-| prove | 922.4 ms | 5,587.7 ms |
-| verify | 17.5 ms | 165.9 ms |
-| プロセス全体の wall time | 2,412 ms | 17,985 ms |
+| keygen（params + VK + PK） | 1,001.1 ms | 11,220.8 ms |
+| prove | 826.1 ms | 5,426.7 ms |
+| verify | 13.8 ms | 144.3 ms |
+| プロセス全体の wall time | 未記録 | 17,670 ms |
 
 wasm の wall time は Node 起動・WASI 初期化・`ParamsIPA::new(10)` を含む。
 native の wall time は cargo の起動オーバーヘッドを含み、他タスクとのビルド
@@ -153,7 +158,13 @@ instance 列に拘束する。
   利用側の責務。
 - **C ABI / Nim 統合済み**: 本回路は `rustcrypto_halo2_ipa_bn254_*` の
   circuit id レジストリに `circuit_id=2`（3 入力固定）と `0x100+n`
-  （任意 arity、n=0..=12）として登録されている。
+  （任意 arity、n=0..=12）として登録されている。鍵 artifact は **V2**
+  （`RCH2IPV2` / `RCH2IPP2`）であり、旧 V1-magic の Poseidon2 VK/PK は拒否
+  される。fixture は V2 で再生成済みで、wasm32-wasip1 の V2 再実行も完了
+  している。
+- **Chip の wasm 実行は未検証**: `Poseidon2Chip` は Rust の回路部品であり、
+  この smoke は単体 `Poseidon2HashCircuit` を実行する。Chip を使う複合回路の
+  wasm 実行は別途検証が必要。
 - **性能比較ではない**: k=10 は意図的な固定値であり、回路の最適化や
   Poseidon1 との比較を目的としない。wasm の実行時間はホスト CPU と Node の
   バージョンに依存する。

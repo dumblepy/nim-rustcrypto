@@ -153,6 +153,13 @@ reply = i32 status LE || u64 verifier instructions LE || u32 wasm memory pages L
 
 ### 2.3 実測（ローカル PocketIC）
 
+> **artifact revision の注意**: 以下の実測は **P0 修正前の V1 Poseidon2
+> artifact** による記録である。現行の Poseidon2 VK/PK は V2
+> （`RCH2IPV2` / `RCH2IPP2`）で、committed fixture も V2 に再生成済み。
+> canister の V2 VK 再 pin・再ビルド・PocketIC 再実行は未実施であり、
+> 下記 instructions / cycles は V2 の値ではない。旧 V1 VK は現行実装が
+> 拒否する。
+
 測定環境: Node `v24.22.1`、`@dfinity/pic` 0.25.0、`opt-level = 3`、fat LTO、
 `codegen-units = 1`、`strip = "symbols"`。fixture は k=8、proof 5,612 bytes、
 instances 144 bytes、VK 1,214 bytes。

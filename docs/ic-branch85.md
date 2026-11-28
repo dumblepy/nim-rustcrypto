@@ -5,7 +5,7 @@
 | canister | crate | method | 役割 |
 |---|---|---|---|
 | Halo2 IPA/BN254 verifier（cubic, id 1） | `examples/halo2-ipa-ic-verifier` | `canister_update verify` | ビルド時にピン留めした VK で cubic の v1 proof を検証 |
-| Halo2 IPA/BN254 verifier（Poseidon2 hash3, id 2） | `examples/halo2-ipa-poseidon2-ic-verifier` | `canister_update verify` | ビルド時にピン留めした id 2 VK で Poseidon2 回路の v1 proof を検証 |
+| Halo2 IPA/BN254 verifier（Poseidon2 hash3, id 2） | `examples/halo2-ipa-poseidon2-ic-verifier` | `canister_update verify` | ビルド時にピン留めした id 2 の V2 VK で Poseidon2 回路の proof を検証 |
 | Poseidon2/BN254 hash | `examples/poseidon2-ic-hash` | `canister_update hash` | 0..=12 個の `Fr` を Noir/Barretenberg sponge でハッシュ |
 
 いずれも Candid ではなく、IC の raw update エンドポイント（`ic0.msg_arg_data_*` /
@@ -123,8 +123,13 @@ pin する VK だけを circuit id 2 用に変えた canister である。
   `halo2-ipa-verify-only,halo2-ipa-params-cache`、同じ dependency /
   `[patch.crates-io]` / getrandom の fail-closed stub を使う。
 - `const APPROVED_VK: &[u8] = include_bytes!(env!("HALO2_IPA_APPROVED_VK"));`
-  に `tests/fixtures/halo2_ipa_poseidon2_v1.hex` の `VK`（1,214 bytes）を
-  `HALO2_IPA_APPROVED_VK` で渡す。
+  に `tests/fixtures/halo2_ipa_poseidon2_v1.hex` の `VK` を
+  `HALO2_IPA_APPROVED_VK` で渡す。ただし Poseidon2 の P0 制約修正で VK が
+  変わったため、**V2 magic（`RCH2IPV2`）に再生成した VK を pin する**必要が
+  ある。committed fixture は V2 magic で再生成済みであり、旧 V1 は
+  `halo2_ipa_poseidon2_legacy_v1.hex` として保持している。旧 V1 VK を pin
+  した canister は現行実装が `INVALID_VERIFYING_KEY` で拒否する。canister の
+  V2 VK 再 pin・再ビルド・PocketIC 再実行は未実施である。
 - raw な `canister_update verify` を公開し、任意の VK / witness / params /
   prover / RNG は受け付けない。
 
@@ -156,6 +161,10 @@ reply = i32 status LE || u64 verifier instructions LE || u32 pages LE   (16 byte
   コピー前に `9` を返す（mock `ic0` で `msg_arg_data_copy` 未呼び出しを確認）。
 
 ### 2.3 実測（この run）
+
+> 以下は **P0 制約修正前（V1 artifact）** の記録である。V1 VK は現行実装では
+> 受理されないため、V2 fixture の再生成後に canister を再ビルドし、PocketIC で
+> 再計測する必要がある。数値を V2 の保証として引用しないこと。
 
 測定環境は §1 と同じ（Node `v24.22.1`、`@dfinity/pic` 0.25.0、release +
 fat LTO + `strip = "symbols"`）。fixture は k=8、proof 5,612 bytes、
@@ -346,7 +355,9 @@ IPA の import は `msg_arg_data_size`、`msg_arg_data_copy`、
 - Poseidon2 IPA verifier も **verify 専用**であり、canister 内での proving /
   keygen は実装・試行していない。ブラウザ Worker での prove と ICP での
   verify は別経路である。この canister が pin するのは circuit id 2（3 入力固定）
-  であり、C ABI/Nim の任意 arity `0x100+n` 用の VK は別途ビルド・pin が必要。
+  の V2 VK であり、現在の V1 fixture / V1 pin のままでは動作しない。V2 VK の
+  再生成・再 pin・PocketIC 再実行は未実施。C ABI/Nim の任意 arity `0x100+n`
+  用の VK は別途ビルド・pin が必要。
 - ブラウザ検証は headless Chromium のみで、Firefox / Safari は未検証。
 - **IPA params cache**: `halo2-ipa-params-cache` により同一 canister インスタンス
   内の warm call は params を再生成しない。ただし単一 thread-local スロットの

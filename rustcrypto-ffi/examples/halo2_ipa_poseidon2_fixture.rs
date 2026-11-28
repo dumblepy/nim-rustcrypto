@@ -5,9 +5,11 @@
 //! cargo run --locked --release --example halo2_ipa_poseidon2_fixture [output.hex] [arity]
 //! ```
 //!
-//! - Without `arity`, the legacy 3-input circuit id `2` is used and the default
+//! - Without `arity`, the fixed 3-input circuit id `2` is used and the default
 //!   output is `../tests/fixtures/halo2_ipa_poseidon2_v1.hex` relative to this
-//!   crate.
+//!   crate. Poseidon2 artifacts are V2 (`RCH2IPV2` / `RCH2IPP2`); the V1
+//!   pre-soundness-fix fixtures are kept as `*_legacy_v1.hex` and must be
+//!   rejected.
 //! - With `arity` in `0..=12`, the arbitrary-arity circuit id
 //!   `0x100 + arity` is used at its minimum `k`. For example:
 //!   `cargo run --locked --release --example halo2_ipa_poseidon2_fixture \
@@ -57,7 +59,7 @@ fn main() {
         std::process::exit(2);
     }
 
-    // Without an explicit arity the legacy 3-input circuit id 2 is used so the
+    // Without an explicit arity the fixed 3-input circuit id 2 is used so the
     // committed `halo2_ipa_poseidon2_v1.hex` fixture stays reproducible.
     let legacy = arity_arg.is_none();
     let arity: usize = match arity_arg {
