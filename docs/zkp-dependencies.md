@@ -83,8 +83,14 @@ Status: the Rust API contract, v1 wire formats (`RCH2IPV1`, `RCH2IPP1`,
 `RCH2IPF1`, `RCH2IPI1`), Nim type-first wrapper, and a committed fixture are in
 this branch. Verified in the development container (2026-11-27):
 
-- `cargo test --lib halo2_ipa`: 11 passed.
-- `nimble test -y`: includes the 7 + 2 Nim tests for IPA.
+- `cargo test --lib halo2_ipa`: 25 passed
+  (`cargo test --locked --lib halo2_ipa -- --list` reports 25 tests). This
+  includes the one-shot cache tests: sizing + body share a single keygen
+  (`prepare_sizing_and_body_share_one_keygen`) and a single proof generation
+  (`prove_sizing_and_body_share_one_proof`), short-output retries reuse the
+  cache, different `k`/`circuit_id` regenerate, and a changed statement never
+  reuses an old proof.
+- `nimble test -y`: includes the 16 Nim tests for IPA.
 - `ci/test_halo2_ipa_wasm.sh`: native, `wasm32-wasip1`, and
   `wasm32-unknown-unknown` verify the committed fixture. The unknown-target
   module has host imports from unrelated code paths, so the smoke replaces every
@@ -93,8 +99,10 @@ this branch. Verified in the development container (2026-11-27):
   `SingleStrategy`; `AccumulatorStrategy` was rejected because it samples a
   random scalar during verification.
 - The example circuit is a small built-in cubic demo, not a general R1CS
-  frontend. A separate Poseidon2 custom-gate demo exists in
-  `src/poseidon2_halo2.rs` (Rust-only; not registered as a C ABI circuit id).
+  frontend. The Poseidon2 custom-gate circuit in `src/poseidon2_halo2.rs` is
+  registered in the C ABI/Nim registry as circuit id `2` (3-input fixed) and as
+  `0x100+n` for arity `n = 0..=12`; arbitrary user circuits and a Noir frontend
+  are still not supported.
 - The verify-only feature `halo2-ipa-verify-only` excludes prover/keygen and the
   `prepare`/`prove` symbols. The ICP verifier canister builds with it and has
   only the five `ic0` imports (no `__wbindgen`/`getrandom`/Web Crypto imports).
@@ -119,8 +127,15 @@ Parameters recorded in the source: width `t = 4`, rate `3`, capacity `1`,
 S-box `x^5`, `R_F = 8`, `R_P = 56`. Verified in the development container
 (2026-11-27):
 
-- `cargo test --lib poseidon2`: 12 passed, including the permutation KAT and
-  the Noir sponge KAT for `n = 0..=7` plus the R1CS gadget KAT.
+- `cargo test --lib poseidon2`: 27 tests
+  (`cargo test --locked --lib poseidon2 -- --list` reports 27 tests; the filter
+  also matches the four Poseidon2-related `halo2_ipa` tests). The native and
+  gadget suites include the permutation KAT, the Noir sponge KAT for
+  `n = 0..=7`, and the R1CS gadget KAT. The Halo2 gate suite adds
+  `hash_output_never_panics_for_supported_arities` and
+  `halo_fr_matches_canonical_representation_for_all_constants`, which cover the
+  removal of panic-capable `.expect()` calls from the wasm `panic = "abort"`
+  production path.
 - `nimble test -y`: includes the Poseidon2 Nim tests and the unchanged
   Poseidon1 regression suite.
 - `ci/test_poseidon2_wasm.sh`: native, `wasm32-wasip1`, and
@@ -168,5 +183,7 @@ Nim `-d:release`), verifying the committed fixtures with a warm process. These a
 Static archive sizes in this build after enabling Halo2 on wasm and protocol-shape
 validation: Linux x86_64 49,496,168 bytes (~47.2 MiB), `wasm32-unknown-unknown`
 33,142,524 bytes (~31.6 MiB), `wasm32-wasip1` 32,237,204 bytes (~30.7 MiB). These
-are raw `.a` sizes, not compressed release assets. Memory usage, instruction counts,
-and wasm runtime timings were not measured.
+are raw `.a` sizes, not compressed release assets. Memory usage, instruction
+counts, and wasm runtime timings are outside this native smoke benchmark; the
+branch-85 wasm/ICP measurements are in `docs/benchmarks-branch85.md` and
+`docs/ic-branch85.md`.

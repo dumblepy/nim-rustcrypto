@@ -40,10 +40,9 @@ use crate::poseidon2::{
     POSEIDON2_BN254_MAX_INPUTS, POSEIDON2_BN254_RATE, POSEIDON2_BN254_WIDTH,
     constants::BN254_CONFIG,
 };
-use ark_ff::{BigInteger, PrimeField as ArkPrimeField};
+use ark_ff::PrimeField as ArkPrimeField;
 use halo2_axiom::circuit::{Cell, Layouter, Region, SimpleFloorPlanner, Value};
 use halo2_axiom::halo2curves::bn256::Fr;
-use halo2_axiom::halo2curves::ff::PrimeField as HaloPrimeField;
 use halo2_axiom::plonk::{
     Advice, Assigned, Circuit, Column, ConstraintSystem, Error, Expression, Fixed, Instance,
     Selector,
@@ -68,18 +67,22 @@ const P_END: usize = RF_FIRST + POSEIDON2_HALO2_PARTIAL_ROUNDS;
 
 /// The vendored constants are `ark_bn254::Fr`; the gate lives in
 /// `halo2_axiom`'s `Fr`. Both are BN254's scalar field, so the canonical
-/// little-endian representation is converted byte-for-byte.
+/// 64-bit limbs are reinterpreted directly (infallibly) into the gate field.
 fn halo_fr(value: ark_bn254::Fr) -> Fr {
-    let bytes = value.into_bigint().to_bytes_le();
-    let mut repr = [0u8; 32];
-    repr.copy_from_slice(&bytes[..32]);
-    Option::<Fr>::from(Fr::from_repr(repr)).expect("BN254 scalar field")
+    // `ark_bn254::Fr` and `halo2_axiom`'s `Fr` are the same BN254 scalar field,
+    // so `into_bigint` already yields the canonical (non-Montgomery) 64-bit
+    // limbs, which are `< modulus`. `Fr::from_raw` maps canonical limbs into
+    // the Montgomery representation without any fallible decode. Using it
+    // (instead of a fallible byte decode) keeps the wasm32 `panic=abort`
+    // production path free of a trap on malformed inputs.
+    Fr::from_raw(value.into_bigint().0)
 }
 
 /// Inverse of [`halo_fr`], used by tests to compare against the vendored
 /// `ark_bn254::Fr` implementation.
 #[cfg(test)]
 fn ark_fr(value: Fr) -> ark_bn254::Fr {
+    use halo2_axiom::halo2curves::ff::PrimeField as _;
     ark_bn254::Fr::from_le_bytes_mod_order(value.to_repr().as_ref())
 }
 
@@ -140,10 +143,21 @@ pub fn permutation_output(input: [Fr; 4]) -> [Fr; 4] {
 /// This computes the same sponge as the vendored `ark_bn254::Fr`
 /// implementation; tests compare both representations.
 pub fn hash_output(inputs: &[Fr]) -> Fr {
-    sponge_witnesses(inputs)
-        .last()
-        .expect("the sponge always performs at least one permutation")
-        .trace[POSEIDON2_HALO2_ROUNDS][0]
+    let blocks = sponge_witnesses(inputs);
+    // `hash_permutation_count` is always `>= 1`, so the sponge always performs
+    // at least one permutation and `blocks` is never empty. `last()` keeps the
+    // production path free of a panicking `expect`/index; the fallback mirrors
+    // the exact single-block sponge for the empty input state and is therefore
+    // the same digest rather than an arbitrary value.
+    match blocks.last() {
+        Some(block) => block.trace[POSEIDON2_HALO2_ROUNDS][0],
+        None => permutation_trace([
+            Fr::from(0u64),
+            Fr::from(0u64),
+            Fr::from(0u64),
+            length_iv(inputs.len()),
+        ])[POSEIDON2_HALO2_ROUNDS][0],
+    }
 }
 
 /// Instance values bound by [`Poseidon2PermutationCircuit`]:
@@ -847,7 +861,7 @@ impl Circuit<Fr> for Poseidon2HashCircuit {
                     } else {
                         PrevBinding::Copied {
                             values: block.map(|block| block.prev),
-                            cells: previous_output.expect("previous permutation output"),
+                            cells: previous_output.ok_or(Error::Synthesis)?,
                         }
                     };
 
@@ -877,10 +891,7 @@ impl Circuit<Fr> for Poseidon2HashCircuit {
                     digest_cells = Some(assigned.state[POSEIDON2_HALO2_ROUNDS]);
                 }
 
-                Ok((
-                    raw_cells,
-                    digest_cells.expect("at least one sponge permutation"),
-                ))
+                Ok((raw_cells, digest_cells.ok_or(Error::Synthesis)?))
             },
         )?;
 
@@ -896,6 +907,7 @@ impl Circuit<Fr> for Poseidon2HashCircuit {
 mod tests {
     use super::*;
     use halo2_axiom::dev::MockProver;
+    use halo2_axiom::halo2curves::ff::PrimeField as _;
 
     const HASH_K: u32 = 10;
     const PERMUTATION_K: u32 = 7;
@@ -1056,6 +1068,53 @@ mod tests {
             trace[round + 1] = apply_round(trace[round], round);
         }
         trace
+    }
+
+    #[test]
+    fn hash_output_never_panics_for_supported_arities() {
+        // `hash_output` is a public, non-`Result` API used by `halo2_ipa.rs`,
+        // so it must be total for every accepted input count. This also fixes
+        // the sponge invariant `hash_permutation_count(n) >= 1`.
+        for n in 0..=POSEIDON2_BN254_MAX_INPUTS {
+            assert!(
+                hash_permutation_count(n) >= 1,
+                "sponge must perform at least one permutation for n = {n}"
+            );
+            let inputs: Vec<Fr> = (1..=n as u64).map(Fr::from).collect();
+            let digest = hash_output(&inputs);
+            let expected = halo_fr(crate::poseidon2::poseidon2_bn254_hash_impl(&ark_inputs(
+                &inputs,
+            )));
+            assert_eq!(digest, expected, "digest mismatch n = {n}");
+        }
+    }
+
+    #[test]
+    fn halo_fr_matches_canonical_representation_for_all_constants() {
+        // `halo_fr` must be a value-preserving BN254 scalar conversion for the
+        // whole constants table (all round constants and internal diagonals).
+        let check = |value: ark_bn254::Fr| {
+            let converted = halo_fr(value);
+            // Independent round trips: back through the ark representation and
+            // through the canonical little-endian byte decode used previously.
+            assert_eq!(ark_fr(converted), value);
+            let bytes = {
+                use ark_ff::BigInteger;
+                value.into_bigint().to_bytes_le()
+            };
+            let mut repr = [0u8; 32];
+            repr.copy_from_slice(&bytes[..32]);
+            assert_eq!(Option::<Fr>::from(Fr::from_repr(repr)), Some(converted));
+        };
+
+        for diagonal in BN254_CONFIG.internal_matrix_diagonal.iter() {
+            check(*diagonal);
+        }
+        for row in BN254_CONFIG.round_constant.iter() {
+            for value in row.iter() {
+                check(*value);
+            }
+        }
     }
 
     #[test]

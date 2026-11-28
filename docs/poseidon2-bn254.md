@@ -127,10 +127,11 @@ int rustcrypto_poseidon2_bn254_hash(
 | 非 canonical `Fr` | `RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT` |
 | 内部 panic | `RUSTCRYPTO_ERR_PANIC` |
 
-## Nim type-first API（想定インターフェース）
+## Nim type-first API（実装済み）
 
-Nim wrapper は別タスクで実装する。公開面は marker type を namespace にした
-type-first API とする。
+Nim wrapper は実装済みで、marker type を namespace にした type-first API を
+公開面としている。`tests/algorithm/test_poseidon2.nim` と KAT で
+Rust 実装との一致を確認している。
 
 ```nim
 import rustcrypto/algorithm/bn254
@@ -198,13 +199,31 @@ gadget とネイティブの一致を `cargo test --lib poseidon2` で確認す�
 
 - RNG、スレッド、OS 時刻、ファイル I/O、ネットワークに依存しない。
   入力から決定的に計算する純粋関数である。
-- `std` の `catch_unwind` はネイティブ C ABI 用。WASM では panic 戦略に従うが、
-  本モジュールは入力検証後に panic し得る操作（unwrap 等）を行わない。
+- ネイティブの C ABI は `catch_unwind` で panic を境界外に出さない。WASM
+  （`panic = "abort"`）では `catch_unwind` が機能しないため、代わりに
+  本番経路から panic し得る `.expect()` を排除している。
+  - `Poseidon2Bn254` の `halo_fr` は `ark_bn254::Fr::into_bigint().0` を
+    `Fr::from_raw` に渡す infallible 変換であり、`expect` を使わない。
+  - Halo2 gate（`poseidon2_halo2.rs`）の `hash_output` は `last()` の
+    `expect` を `match` に置き換え、空 blocks には構造上到達不能な防御的
+    fallback を置く。
+  - `synthesize` の `previous_output.expect` / `digest_cells.expect` は
+    `ok_or(Error::Synthesis)?` に置き換え、エラーとして返す。
+  - 入力検証はライブラリ呼び出し前に行い、不正は `RUSTCRYPTO_*` の
+    エラーコードで返す。
+  これは「本番経路に panic し得る `.expect()` を残さない」という方針であり、
+  **すべての panic がなくなったという意味ではない**（OOM や依存 crate 内部の
+  panic は別問題）。
 - 固定幅・固定長の小さな処理であり、Verify-only canister での利用を想定して
   入力個数と長さを事前に制限する。
 - `ci/test_poseidon2_wasm.sh` で `wasm32-wasip1`（WASI command）と
   `wasm32-unknown-unknown`（cdylib）の KAT を実行済み。後者は import 0 件で
   実行でき、RNG・ホストサービスを要求しないことを確認している。
+- Poseidon2 の **Halo2 回路** は `wasm32-wasip1` で keygen/prove/verify を
+  実行済みで、browser Worker（circuit id 2）でも prove/verify を実行している。
+  ICP canister は verify のみ（circuit id 2 の VK を pin）で、canister 内
+  proving は未試行。詳細は
+  [`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md) を参照。
 
 ## セキュリティ上の注意
 

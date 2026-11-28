@@ -246,9 +246,11 @@ wall time / peak RSS（`rss.txt`）:
    代表しない。
 2. **Halo2 の Poseidon1 vs Poseidon2 比較は、同一 IPA 形状のデモ回路に限る。**
    Poseidon1 custom gate を追加し、両回路を同一 `ParamsIPA::new(10)`・同一入力
-   `[1,2,3]` で実測した（3.4）。ただし回路は本番アプリ等価ではなく、C ABI /
-   Nim / wasm / ICP には未登録。値は
-   [`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md) を参照。
+   `[1,2,3]` で実測した（3.4）。ただし比較用の Poseidon1 回路は本番アプリ等価
+   ではなく、C ABI / Nim / wasm / ICP には未登録。Poseidon2 回路は別途
+   circuit id 2 として登録済みで、wasm32-wasip1 / browser Worker / ICP verify を
+   実測している（[`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md)）。
+   値は [`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md) を参照。
 3. **Halo2 の proof size は回路・PCS 固有で、プロトコル定数ではない。**
    Poseidon1 3,488 B / Poseidon2 5,728 B は k=10・instance 4・この IPA
    プロファイルでの値であり、回路形状や開点数が変われば変わる。R1CS/Groth16

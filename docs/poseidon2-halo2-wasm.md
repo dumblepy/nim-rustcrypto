@@ -137,19 +137,23 @@ instance 列に拘束する。
 
 ## 6. 制限・未実施
 
-- **wasm32-wasip1 のみ**。wasm32-unknown-unknown の browser / Web Worker で
-  この Poseidon2 Halo2 回路を prove する実行は未実施。ICP canister での
-  本回路の prove/verify も未実施（別途の Halo2 IPA verifier canister と
-  Poseidon2 hash canister は別タスク）。
-- **ブラウザ実行なし**: COOP/COEP、Web Worker、SharedArrayBuffer の検証は
-  この smoke の範囲外。
+- **このドキュメントの範囲は wasm32-wasip1**。wasm32-unknown-unknown の
+  browser / Web Worker での prove は別途完了しており、circuit id 2 を
+  Chromium で prepare/prove/verify 済み（
+  [`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md)）。
+  ICP は circuit id 2 の verify-only canister を PocketIC で実行済みで、
+  canister 内 proving は未試行。
+- **ブラウザ実行の詳細は別ドキュメント**: COOP/COEP なし・
+  `crossOriginIsolated=false` の構成は
+  [`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md) を参照。
 - **決定論的 RNG はテスト専用**: `StdRng::from_seed([0x85; 32])` は fixture
   専用。本番の IPA blinding には OS CSPRNG を使うこと。
 - **未監査のデモ回路**: `Poseidon2HashCircuit` は監査済みの汎用 Halo2
   frontend ではない。VK の pin、circuit id の承認、本番資産への適用は
   利用側の責務。
-- **C ABI / Nim 未統合**: 本回路は Rust typed API と example のみ。
-  `rustcrypto_halo2_ipa_bn254_*` の circuit id レジストリには未登録。
+- **C ABI / Nim 統合済み**: 本回路は `rustcrypto_halo2_ipa_bn254_*` の
+  circuit id レジストリに `circuit_id=2`（3 入力固定）と `0x100+n`
+  （任意 arity、n=0..=12）として登録されている。
 - **性能比較ではない**: k=10 は意図的な固定値であり、回路の最適化や
   Poseidon1 との比較を目的としない。wasm の実行時間はホスト CPU と Node の
   バージョンに依存する。

@@ -119,7 +119,7 @@ int rustcrypto_halo2_ipa_bn254_instances_validate(const uint8_t *instances, size
   検査する。circuit id を受け取らないため、回路固有の値数一致は `verify` が
   行う。
 
-### Nim の想定 API（type-first）
+### Nim の type-first API（実装済み）
 
 ```nim
 import rustcrypto/algorithm/halo2_ipa
@@ -147,13 +147,34 @@ if Halo2IpaBn254.verify(vk4, proof4, instances4):
 ```
 
 `prepare` は `(verifyingKey, provingKey)`、`prove` は `seq[byte]`、
-`verify` は `bool` を返す想定。`prove` は PK ヘッダの circuit id から
+`verify` は `bool` を返す。`prove` は PK ヘッダの circuit id から
 witness 長を決める（id 1 = 32 バイト、id 2 = 96 バイト、`BASE + n` =
 `32 * n` バイト）。`preparePoseidon2Hash` は `arity` と最小 `k` を検証し、
 `provePoseidon2Hash` は入力の連結を witness、`[digest, inputs...]` を公開入力
 として `prove` に渡す。`poseidon2HashCircuitId` / `poseidon2HashMinK` で
 id と最小 `k` を取得できる。`validateVerifyingKey` / `validateProvingKey` /
 `validateProof` / `validatePublicInstances` も同様に `bool` を返す。
+
+#### prepare / prove の C ABI 二重呼び出しと one-shot キャッシュ
+
+Nim の `Halo2IpaBn254.prepare` / `prove` は、出力バッファの必要サイズを
+取得する呼び出しと本体の呼び出しで、C ABI を 2 回呼ぶ。Rust 側
+（`halo2_ipa.rs`）は thread-local の one-shot キャッシュを持ち、1 回目の
+keygen / 証明生成の結果を 2 回目が再利用する。
+
+- `prepare`: keygen は 1 回だけ。サイズ取得と本体で同じ VK/PK を返す。
+  出力不足で再試行した場合もキャッシュを再利用する。
+- `prove`: 証明生成（と `OsRng` の消費）は 1 回だけ。サイズ取得と本体で
+  同じ proof を返す。
+- キャッシュの再利用条件は、`prepare` では `circuit_id` / `k`、`prove` では
+  PK / witness / instances の一致である。異なる statement には流用せず、
+  異なる入力では再生成する（古い証明を返さないことをテストで確認）。
+- キャッシュは**メモリ上だけの one-shot であり、trusted SRS ではない**。
+  params は従来どおり `k` から決定的に再生成され、このキャッシュは
+  keygen / 証明生成の重複を避けるためだけのものである。プロセスをまたいで
+  永続化しない。
+
+公開 API / C ABI シグネチャは変えていない。
 
 ### エラーステータス
 
@@ -289,7 +310,8 @@ cargo run --locked --release --example halo2_ipa_poseidon2_fixture \
   ../tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex 12
 ```
 
-`cargo test --lib halo2_ipa` は次を確認する（19 テスト）:
+`cargo test --lib halo2_ipa` は次を確認する（25 テスト、
+`cargo test --locked --lib halo2_ipa -- --list` で確認）:
 
 - `prepare` / `prove` / `verify` の k=8 ラウンドトリップ（cubic と Poseidon2）。
 - 両 committed fixture（cubic / id 2）を C ABI 経由で検証（正常系・繰り返し呼び出し）。
@@ -306,6 +328,10 @@ cargo run --locked --release --example halo2_ipa_poseidon2_fixture \
 - circuit 2 の `k < 7`、任意 arity の最小 `k` 未満 → `INVALID_PARAMETER`。
 - 不正 magic、未知 `circuit_id`、`k<4` / `k>16`、KZG magic の相互拒否。
 - 空入力、NULL 入力、NULL 出力、短い出力バッファ。
+- one-shot キャッシュ: `prepare` のサイズ取得と本体が keygen を共有すること、
+  `prove` のサイズ取得と本体が証明生成を共有すること、出力不足の再試行で
+  キャッシュを再利用すること、`k` / `circuit_id` が変われば再生成すること、
+  異なる statement で古い証明を再利用しないこと。
 
 ### 観測値（k=8、この環境のデバッグビルド）
 
@@ -401,9 +427,12 @@ WASM の命令数・cycle・peak memory は未計測。
 - 一般的な R1CS フロントエンドとしての利用。本モジュールは小さなデモ回路
   （cubic v1 と Poseidon2 hash）専用である。
 - Poseidon2 hash 回路自体の **wasm32-wasip1** 実行は完了
-  （[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）。browser Worker /
-  ICP 上での Poseidon2 witness 生成・prove は未実装（canister の proof 検証は
-  circuit id 2 に対応）。
+  （[`poseidon2-halo2-wasm.md`](poseidon2-halo2-wasm.md)）。**browser Worker の
+  circuit id 2 prove/verify も完了**（Chromium、COOP/COEP なし、
+  [`poseidon2-halo2-browser-icp.md`](poseidon2-halo2-browser-icp.md)）。
+  **ICP は canister での verify が完了**（circuit id 2 の VK を pin、PocketIC）。
+  一方で **canister 内での proving / keygen は未試行**であり、mainnet
+  deploy・dfx・Candid UI も未対応。
 - Poseidon1 の Halo2 custom gate は**比較用に実装済み**
   （[`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md)）。同一 k=10・同一
   IPA での rows/VK/PK/proof 比較は [`benchmarks-branch85.md`](benchmarks-branch85.md)
@@ -429,6 +458,7 @@ WASM の命令数・cycle・peak memory は未計測。
   memory は 53 pages 程度。
 - **Browser Web Worker prove**: COOP/COEP なし・`crossOriginIsolated=false` の
   Chromium で Worker 内 prepare/prove を実行し、Node 側の独立 wasm でも検証。
+  cubic（id 1）に加えて Poseidon2 hash3（id 2）も prove/verify 済み。
   実測（k=8、cubic v1）: prepare 約 1.9–4.1 s、prove 約 2.6–4.9 s、
   verify 約 1.6–2.2 s、wasm 3,962,513 B（circuit id 2 登録後）、linear memory は
   prepare 約 3.9 MB / prove・verify 約 8.1 MB。`SharedArrayBuffer` は不使用。
