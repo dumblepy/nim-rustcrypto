@@ -1,0 +1,38 @@
+[package]
+name = "halo2-ipa-ic-verifier"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# Excludes the HALO2 IPA prover/keygen symbols and OS entropy from the module.
+halo2-ipa-verify-only = []
+# Reuses one deterministic `ParamsIPA` across verify calls in a canister
+# instance (heap-only, lost on upgrade; not a trusted-SRS cache).
+halo2-ipa-params-cache = []
+
+[dependencies]
+ark-bn254 = "0.5"
+ark-ec = "0.5"
+ark-ff = "0.5"
+halo2-axiom = { version = "0.5.3", default-features = false, features = ["circuit-params"] }
+# `halo2-axiom` unconditionally names `rand_core::OsRng` in its IPA
+# `AccumulatorStrategy`. The verification path used here (`SingleStrategy`)
+# never instantiates it, so the entropy import is dead-code eliminated. The
+# backend must still compile for wasm32-unknown-unknown: `getrandom`'s
+# `custom` feature lets this crate register a fail-closed stub instead of
+# pulling `wasm-bindgen` / `crypto.getRandomValues` imports into the module.
+getrandom = { version = "0.2", features = ["custom"] }
+rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
+
+[patch.crates-io]
+halo2-axiom = { path = "../../rustcrypto-ffi/third_party/halo2-axiom-0.5.3" }
+
+[profile.release]
+# Optimize for executed instructions (ICP cycle cost) rather than module size.
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = "symbols"

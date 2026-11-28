@@ -7,7 +7,7 @@ Nim bindings to RustCrypto through a small Rust FFI static library. High-level A
 
 ## Features (summary)
 
-Hashing (SHA-256, SHA3-256, Keccak-256, BLAKE2), HMAC, HKDF, PBKDF2, scrypt, Argon2id, bcrypt, AEAD (ChaCha20-Poly1305, AES-256-GCM, AES-256-GCM-SIV), secp256k1 (ECDSA, Schnorr, recoverable ECDSA), Ed25519, NIST P-256 / P-384 ECDSA, **BLS12-381** (low-level curve/pairing via [`blst`](https://github.com/supranational/blst), `bls-signatures`-compatible minimal-pk-size signing, and minimal-signature-size G2-pk / G1-sig AUG hash-to-G1 verification), RSA (sign/verify, OAEP, PKCS#1 v1.5), X.509 minimal parsing, PKCS#8 / SPKI / PEM for supported keys, plus **Bitcoin**, **Lightning (BOLT-11 signing)**, **Ethereum**, **JWT** helpers, and **zero-knowledge proof verifiers** (Groth16/BN254, a fixed PLONK/BN254 profile, Plonky2/Goldilocks, and a fixed Halo2 KZG/BN254 profile).
+Hashing (SHA-256, SHA3-256, Keccak-256, BLAKE2, Poseidon1/BN254, **Poseidon2/BN254**), HMAC, HKDF, PBKDF2, scrypt, Argon2id, bcrypt, AEAD (ChaCha20-Poly1305, AES-256-GCM, AES-256-GCM-SIV), secp256k1 (ECDSA, Schnorr, recoverable ECDSA), Ed25519, NIST P-256 / P-384 ECDSA, **BLS12-381** (low-level curve/pairing via [`blst`](https://github.com/supranational/blst), `bls-signatures`-compatible minimal-pk-size signing, and minimal-signature-size G2-pk / G1-sig AUG hash-to-G1 verification), RSA (sign/verify, OAEP, PKCS#1 v1.5), X.509 minimal parsing, PKCS#8 / SPKI / PEM for supported keys, plus **Bitcoin**, **Lightning (BOLT-11 signing)**, **Ethereum**, **JWT** helpers, and **zero-knowledge proof verifiers** (Groth16/BN254, a fixed PLONK/BN254 profile, Plonky2/Goldilocks, a fixed Halo2 KZG/BN254 profile, and a **transparent Halo2 IPA/BN254 profile with no trusted setup**).
 
 ## Installation
 
@@ -31,6 +31,18 @@ the committed v1 fixture is verified through the C ABI under Node `WebAssembly`
 (`wasm32-unknown-unknown`) and Node WASI (`wasm32-wasip1`), while native targets keep
 the parallel verification path. See [Halo2 docs](docs/halo2.md) for the exact tested
 runtimes, the vendored `halo2-axiom` feature patch, and security notes.
+
+The **Halo2 IPA/BN254** profile (no trusted setup) and **Poseidon2/BN254** are also
+verified on both wasm targets. Their wasm smokes execute the committed KATs/fixture
+under Node. The Poseidon2 cdylib has zero host imports; the IPA verifier is executed
+with every imported host function replaced by a throwing stub, proving the verify
+path does not request RNG or OS services. Browser Web Worker proving (cubic id 1
+and Poseidon2 hash3 id 2), verify-only ICP canisters with an IPA params cache
+(PocketIC-measured, including circuit id 2 VK pinning but not in-canister
+proving), a registered 3-input Poseidon2 hash circuit (id 2) with arbitrary
+arity `0x100+n`, and a Poseidon2 Halo2 custom-gate `wasm32-wasip1` prove/verify
+run are included. See
+[Halo2 IPA docs](docs/halo2-ipa.md) and [Poseidon2 docs](docs/poseidon2-bn254.md).
 
 公開鍵による非対話暗号化: [RFC 9180 HPKE Base mode](docs/hpke.md) (`Hpke.generateSecretKey/publicKey/seal/open`)。
 
@@ -80,10 +92,18 @@ Per-primitive and per-protocol guides (English):
 
 - [BN254 fields and curve encodings](docs/bn254.md)
 - [Poseidon / BN254](docs/poseidon-bn254.md)
+- [Poseidon2 / BN254 (Noir/Barretenberg-compatible)](docs/poseidon2-bn254.md)
+- [Poseidon2 / BN254 Halo2 custom gate / IPA circuits](docs/poseidon2-halo2-gate.md)
+- [Poseidon2 / BN254 Halo2 gate on wasm32-wasip1](docs/poseidon2-halo2-wasm.md)
+- [Poseidon2 Halo2 browser Worker / ICP verifier](docs/poseidon2-halo2-browser-icp.md)
+- [Poseidon1 / BN254 Halo2 custom gate (comparison demo)](docs/poseidon1-halo2-gate.md)
 - [Groth16 / BN254 verifier](docs/groth16-bn254.md)
 - [PLONK / BN254 verifier (genshi-core profile)](docs/plonk-bn254.md)
 - [Plonky2 / Goldilocks / FRI verifier](docs/plonky2.md)
 - [Halo2 KZG / BN254 verifier (PSE/Axiom SHPLONK profile)](docs/halo2.md)
+- [Halo2 IPA / BN254 (transparent, no trusted setup)](docs/halo2-ipa.md)
+- [Branch 85 benchmarks (Poseidon1/Poseidon2, IPA 1k/20k)](docs/benchmarks-branch85.md)
+- [ICP canisters (IPA verify / Poseidon2 hash)](docs/ic-branch85.md)
 - [ZKP verifier dependencies, licenses, and target matrix](docs/zkp-dependencies.md)
 - [Bulletproofs R1CS / Ristretto255 prover and verifier (opt-in PoC)](docs/bulletproofs-r1cs.md)
 

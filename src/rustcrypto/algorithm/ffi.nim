@@ -125,6 +125,20 @@ const
   Groth16Bn254MaxIcLen* = 4096
   Groth16Bn254MaxPublicInputs* = 4095
   PoseidonBn254MaxInputs* = 12
+  Poseidon2Bn254Width* = 4
+  Poseidon2Bn254Rate* = 3
+  Poseidon2Bn254MaxInputs* = 12
+  Halo2IpaBn254CircuitCubicV1* = 1'u32
+  Halo2IpaBn254CircuitPoseidon2Hash3V1* = 2'u32
+  Halo2IpaBn254CircuitPoseidon2HashV1Base* = 0x100'u32
+  Halo2IpaBn254MinK* = 4'u32
+  Halo2IpaBn254Poseidon2Hash3MinK* = 7'u32
+  Halo2IpaBn254MaxK* = 16'u32
+  Halo2IpaBn254MaxVkLen* = 4 * 1024 * 1024
+  Halo2IpaBn254MaxPkLen* = 64 * 1024 * 1024
+  Halo2IpaBn254MaxProofLen* = 4 * 1024 * 1024
+  Halo2IpaBn254MaxInstanceColumns* = 8
+  Halo2IpaBn254MaxInstanceValues* = 4096
   PlonkBn254VkV1Len* = 1148
   PlonkBn254ProofV1MinLen* = 1028
   PlonkBn254MaxPublicInputs* = 4096
@@ -1234,6 +1248,73 @@ proc poseidonBn254HashRaw*(
     output: ptr uint8,
     outputLen: csize_t,
   ): cint {.cdecl, importc: "rustcrypto_poseidon_bn254_hash".}
+
+proc poseidon2Bn254PermuteRaw*(
+    state: ptr uint8,
+    stateLen: csize_t,
+    output: ptr uint8,
+    outputLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_poseidon2_bn254_permute".}
+
+proc poseidon2Bn254HashRaw*(
+    inputs: ptr uint8,
+    inputsLen: csize_t,
+    inputCount: csize_t,
+    output: ptr uint8,
+    outputLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_poseidon2_bn254_hash".}
+
+proc halo2IpaBn254PrepareRaw*(
+    circuitId: uint32,
+    k: uint32,
+    vk: ptr uint8,
+    vkCap: csize_t,
+    vkLen: ptr csize_t,
+    pk: ptr uint8,
+    pkCap: csize_t,
+    pkLen: ptr csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_prepare".}
+
+proc halo2IpaBn254ProveRaw*(
+    pk: ptr uint8,
+    pkLen: csize_t,
+    witness: ptr uint8,
+    witnessLen: csize_t,
+    instances: ptr uint8,
+    instancesLen: csize_t,
+    proof: ptr uint8,
+    proofCap: csize_t,
+    proofLen: ptr csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_prove".}
+
+proc halo2IpaBn254VerifyRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+    proof: ptr uint8,
+    proofLen: csize_t,
+    publicInstances: ptr uint8,
+    publicInstancesLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_verify".}
+
+proc halo2IpaBn254VkValidateRaw*(
+    verifyingKey: ptr uint8,
+    verifyingKeyLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_vk_validate".}
+
+proc halo2IpaBn254PkValidateRaw*(
+    provingKey: ptr uint8,
+    provingKeyLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_pk_validate".}
+
+proc halo2IpaBn254ProofValidateRaw*(
+    proof: ptr uint8,
+    proofLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_proof_validate".}
+
+proc halo2IpaBn254InstancesValidateRaw*(
+    publicInstances: ptr uint8,
+    publicInstancesLen: csize_t,
+  ): cint {.cdecl, importc: "rustcrypto_halo2_ipa_bn254_instances_validate".}
 
 proc groth16Bn254VerifyRaw*(
     verifyingKey: ptr uint8,

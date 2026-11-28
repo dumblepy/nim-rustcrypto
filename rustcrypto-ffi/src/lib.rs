@@ -23,6 +23,7 @@ pub mod groth16_prover_ffi;
 // C ABI entry points that the Nim wrapper links against.
 #[doc(hidden)]
 pub mod halo2;
+pub mod halo2_ipa;
 mod hash;
 mod hkdf;
 mod hmac;
@@ -30,6 +31,10 @@ mod oid;
 mod plonk_bn254;
 mod plonky2;
 mod poseidon;
+pub mod poseidon2;
+pub mod poseidon2_gadget;
+pub mod poseidon2_halo2;
+pub mod poseidon1_halo2;
 
 /// Helpers for producing deterministic test fixtures (not part of the C ABI).
 #[doc(hidden)]
@@ -131,6 +136,9 @@ pub const GROTH16_BN254_VK_V1_HEADER_LEN: usize = groth16::GROTH16_BN254_VK_V1_H
 pub const GROTH16_BN254_MAX_IC_LEN: usize = groth16::GROTH16_BN254_MAX_IC_LEN;
 pub const GROTH16_BN254_MAX_PUBLIC_INPUTS: usize = groth16::GROTH16_BN254_MAX_PUBLIC_INPUTS;
 pub const POSEIDON_BN254_MAX_INPUTS: usize = poseidon::POSEIDON_BN254_MAX_INPUTS;
+pub const POSEIDON2_BN254_WIDTH: usize = poseidon2::POSEIDON2_BN254_WIDTH;
+pub const POSEIDON2_BN254_RATE: usize = poseidon2::POSEIDON2_BN254_RATE;
+pub const POSEIDON2_BN254_MAX_INPUTS: usize = poseidon2::POSEIDON2_BN254_MAX_INPUTS;
 pub const PLONK_BN254_VK_V1_LEN: usize = plonk_bn254::PLONK_BN254_VK_V1_LEN;
 pub const PLONK_BN254_PROOF_V1_MIN_LEN: usize = plonk_bn254::PLONK_BN254_PROOF_V1_MIN_LEN;
 pub const PLONK_BN254_MAX_PUBLIC_INPUTS: usize = plonk_bn254::PLONK_BN254_MAX_PUBLIC_INPUTS;
@@ -138,3 +146,11 @@ pub const PLONKY2_MAX_BLOB_LEN: usize = plonky2::PLONKY2_MAX_BLOB_LEN;
 pub const HALO2_KZG_BN254_PARAMS_V1_LEN: usize = halo2::HALO2_KZG_BN254_PARAMS_V1_LEN;
 pub const HALO2_KZG_BN254_MAX_PROTOCOL_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROTOCOL_LEN;
 pub const HALO2_KZG_BN254_MAX_PROOF_LEN: usize = halo2::HALO2_KZG_BN254_MAX_PROOF_LEN;
+pub const HALO2_IPA_BN254_CIRCUIT_CUBIC_V1: u32 = halo2_ipa::HALO2_IPA_BN254_CIRCUIT_CUBIC_V1;
+pub const HALO2_IPA_BN254_MIN_K: u32 = halo2_ipa::HALO2_IPA_BN254_MIN_K;
+pub const HALO2_IPA_BN254_MAX_K: u32 = halo2_ipa::HALO2_IPA_BN254_MAX_K;
+pub const HALO2_IPA_BN254_MAX_VK_LEN: usize = halo2_ipa::HALO2_IPA_BN254_MAX_VK_LEN;
+pub const HALO2_IPA_BN254_MAX_PK_LEN: usize = halo2_ipa::HALO2_IPA_BN254_MAX_PK_LEN;
+pub const HALO2_IPA_BN254_MAX_PROOF_LEN: usize = halo2_ipa::HALO2_IPA_BN254_MAX_PROOF_LEN;
+pub const HALO2_IPA_BN254_MAX_INSTANCE_COLUMNS: usize = halo2_ipa::HALO2_IPA_BN254_MAX_INSTANCE_COLUMNS;
+pub const HALO2_IPA_BN254_MAX_INSTANCE_VALUES: usize = halo2_ipa::HALO2_IPA_BN254_MAX_INSTANCE_VALUES;

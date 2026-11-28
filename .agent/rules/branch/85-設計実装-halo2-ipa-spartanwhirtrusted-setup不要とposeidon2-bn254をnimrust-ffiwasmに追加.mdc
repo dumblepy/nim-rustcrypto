@@ -1,0 +1,108 @@
+---
+description: Halo2 IPA / Poseidon2 / BN254 ブランチでの開発時に読み込む
+alwaysApply: false
+---
+## 目的
+Trusted Setup（秘密のtrapdoor/SRS ceremony）不要の汎用ZK証明を追加する。クライアントのNative/Browser WASMでproveし、NimからリンクしたICP向けWASMで低コストにverifyできることを目指す。既存KZG/Groth16等は維持。特定アプリケーションの回路・台帳・資産仕様は本Issueの対象外。
+
+## 調査結果
+main tree ac043d851706b342df1b38292c0f6df1316682e8 を調査。関連 #69, #70, #79, #83, PR #84。
+- [docs/halo2.md](../blob/main/docs/halo2.md) / [halo2.nim](../blob/main/src/rustcrypto/algorithm/halo2.nim): 公開APIは Halo2KzgBn254 (BN254/KZG/SHPLONK/Blake2b) のVerifierとvalidate helpersのみ。IPA proofは非互換。汎用Halo2 Prover APIなし。
+- vendored halo2-axiom 0.5.3 の src/poly/ipa/commitment.rs には ParamsIPA とhash-to-curveによる決定的な生成処理がある。ただし存在するだけではBN254 IPAの完全なprove/verify、VK復元、Nim/ICPリンクが可能とは断定できない。
+- 既存BN254 Fr、Circom互換Poseidon、Groth16/R1CSやBulletproofsのFFI・fixture・WASM CIを再利用できるが、異なるfield/PCS/証明形式を変換するだけで互換になるわけではない。
+- 現行Halo2 WASM smokeはNodeのC ABI実行まで。Nim-generated WASM/ICP実行と性能は別途検証が必要。
+
+## 1. Phase 0: プロファイル選定・実現性確認（必須）
+### Halo2 IPA
+第一候補: 既存halo2-axiom 0.5.3系列のIPA/BN254 G1（scalar Fr）、Blake2b transcript。実際に nativeで ParamsIPA::new、keygen、create_proof、verify_proof、VK再構築/復元まで通す。multi-open/strategy、transcript challenge、curve/field、k、serialization、generator導出domainを固定。API互換性・hash-to-curveの安全性（独立生成、既知離散対数なし）を確認。IPAの最終MSMを必ず実行する。既存KZG snark-verifierで代用しない。
+- Zcash halo2_proofs IPA/Pastaは代替調査対象。既存のBN254 Fr回路をそのまま扱えないこと、回路非依存のVK復元制限を考慮。非native演算の負荷も記録。BN254 IPAが不可なら別の監査可能なIPA実装/固定回路アダプタを検討し、プロファイル変更を明記する。
+- VK復元に具体的Circuit型が必要なら、汎用の承認済み制約記述から同一Circuitを決定的に再構成する方式、または汎用Rust adapter API + 利用側固定回路登録方式を評価。架空の汎用VK deserialize APIを作らない。任意実行コードを外部入力にしない。
+- 公開paramsを独立再生成・照合可能にする。任意のcaller提供generatorを信頼しない。秘密乱数によるSRS生成を使用しない。keygen自体は透明な前処理として許容。
+
+## 1.5 Poseidon2 / BN254（新規必須スコープ）
+利用側 [synoria-wallet #91](https://github.com/dumblepy/synoria-wallet/issues/91) は既存s-tokenを変更せず、独立s4-tokenを新設する。新規回路の共通ハッシュはPoseidon2を第一採用方針とする。既存Poseidon1 API/定数/出力/幅4最適化は一切変更しない。
+- 現行 rustcrypto-ffi/src/poseidon.rs はlight-poseidon 0.4.1 / Circom互換Poseidon1のみ。Poseidon2は別モジュール、型 Poseidon2Bn254、C ABI rustcrypto_poseidon2_bn254_* として追加。
+- 第一候補はNoir/Barretenberg互換 BN254 Fr、t=4、rate=3、capacity=1、x^5、RF=8/RP=56。Noir bn254_blackbox_solver、Barretenbergを照合し、正確な定数・行列・round順序・revision・license・security根拠を固定する。Horizen Labsの別幅/旧定数と混同しない。
+- permutationとhash/spongeは別API。hashはNoir/Barretenbergの固定長sponge（length IV、吸収順序、最終block・squeeze規則をupstream revisionとKATで厳密固定）を第一候補にする。入力個数0/1/2/3/4/6/8/9等、特にrateの倍数でのpadding/final permutation差をテスト。domain tagは呼出側の規範的な最初のfield要素、入力順/個数を厳密管理し、fieldはcanonical 32-byte BE、mod reductionで不正値を受理しない。許容入力数上限と空入力規則を明示。独自暗号パラメータ生成は避ける。
+- Nim type-first API: Poseidon2Bn254.permute(state: array[4,Bn254Fr]): array[4,Bn254Fr]、hash(inputs: openArray[Bn254Fr]): Bn254Fr（概念）。Rust typed API、C ABI、Nim wrapper、browser WASM/TS adapterを提供。Halo2 IPA custom gateの共通KATを用意。witness計算の一致に加え各roundを制約し、改変入力や出力を拒否する。アプリ固有のdomain/Note/Merkle仕様はSynoria側。
+- Verify-only canisterでは幅4固定・小さな関数単位・bounded alloc・no RNG/threads/OS。既存W4のIC Wasm function complexity問題を再発させない。Native/Nim/Node browser/ICPで実行する。
+- Poseidon1 vs Poseidon2を同等用途・securityで比較: 1/2/3/8/9 field hash、Merkle node、2×32 private path、R1CS非線形制約数とmatrix nnz/padding、Halo2 rows/k/lookup、WASM instructions/cycles、hash/証明生成検証時間、proof size。Poseidon2の疎な線形層は有利だが、R1CS乗算制約や複数blockのspongeの実測改善を保証しない。
+- [x] docs/poseidon2-bn254.md、src/rustcrypto/algorithm/poseidon2.nim、rustcrypto-ffi/src/poseidon2.rs、ffi/umbrella export、CI/release、独立参照KAT・異常系・既存Poseidon1回帰を追加。既存APIの変更は禁止。
+- [x] Phase 0でprofileと安全性・性能をレビューし、問題があればblockして別ADRを作る。自動的にPoseidon1へfallbackしない。（性能比較は `docs/poseidon1-halo2-gate.md` / `docs/benchmarks-branch85.md` / `docs/ic-branch85.md` に実測を記録済み。ただしアプリ等価 statement や wasm pages など未計測範囲は残る）
+参考: https://eprint.iacr.org/2023/323 、https://github.com/noir-lang/noir/blob/master/acvm-repo/bn254_blackbox_solver/src/poseidon2.rs 、https://github.com/HorizenLabs/poseidon2 、https://docs.rs/pso-poseidon/latest/pso_poseidon/poseidon2/index.html
+
+## 2. 汎用API / wire format（概念）
+既存規約 SYW-FFI/BUILD/API/DEV を遵守。新規marker type は Halo2IpaBn254 とする。
+- prepare(circuitDescriptor, profileConfig) → 公開params / proving artifact / verifying artifact（native CLIまたはRust APIでも可）
+- prove(provingArtifact, witness, expectedPublicInputs, rng) → proof bytes
+- verify(verifyingArtifact, proof, expectedPublicInputs): bool（IPAはapproved paramsを別途入力してもよい）
+- validateVerifyingArtifact / validatePublicInputs、必要に応じて検証データのprepare/cache。
+- Rustのtyped API、C ABI rustcrypto_halo2_ipa_<curve>_*、Nim type-first APIを分離。ブラウザにはRust WASM/TS adapterまたは既存FFI規約準拠の呼び出し経路を提供。ProverはOS/browser CSPRNGまたは明示的な安全なentropy APIでblinding、test-only deterministic RNGは別経路。VerifierはOS RNG・I/O・clock・threadsに依存しない。
+- C ABIはpointer/len/status/呼出側所有の出力buffer、必要容量の取得、既存status規約。Rustの所有権を境界に出さない。秘密witnessのログ禁止、可能な範囲でzeroize。
+- 各profile独立のmagic/version、canonical 32-byte BE BN254 Fr等の境界表現（内部codecへの変換を明記）、公開入力数/順序、回路digest、params/config ID、証明長、余剰bytes禁止、正規性、点のsubgroup等を定義。上限をdecode/allocate前に適用。可変長proof、VK/PKは別物。安全なprofile/VK pinningが利用側責務である旨を明記。
+- transcriptにrelation/approved circuit digest、profile、公開入力とsecurity configを適切にbind。独自FSやblindingを安易に実装しない。非ZK証明、異profile、誤public inputを拒否。
+
+## 3. 実装・CI
+- [x] Rustモジュール halo2_ipa.rs、必要に応じて *_ffi.rs。既存lib.rs/status/featureと統合。
+- [x] TDDでRust fixture→staticlib→src/rustcrypto/algorithm/ffi.nim とmarker module→umbrella export→Nim tests。依存追加はcargo CLI、rev/lock固定。既存WASM vendored patchの影響確認、ライセンス・変更履歴を記録。不要なprover/compiler依存がcanister verifierに入らないようfeature/アーカイブ分離とdead-code eliminationを評価。（`halo2-ipa-verify-only` と `halo2-ipa-params-cache` を実装。ICP canister は import が `ic0` 5 関数のみ）
+- [ ] Ubuntu native、macOS arm64、wasm32-unknown-unknown、wasm32-wasip1 のビルド・実行fixture。Browser Web Workerでprove、同一バイナリをRust/Nim native/両WASMでverify。SharedArrayBuffer不要のsingle-thread fallbackも確認。ICP向けNim static link、Wasm imports/validation/function complexity、PocketIC deploy/verifyの実行例または再現手順。ビルド成功を実行成功とみなさない。（Ubuntu native、両 wasm、Browser Worker、PocketIC は完了。macOS arm64 は CI 定義のみで未実行、ICP 向け Nim static link は未実施）
+- [x] docs/halo2-ipa.md / docs/zkp-dependencies.md / README / release artifacts、symbols、SHA256、toolchain、CI scripts更新。
+- [x] 既存Groth16/KZG/BP/HPKEその他の回帰テスト。誤proof/VK/params/public input/順序/field/curve/profile、切断・末尾余剰、過大長、NULL、不正点、不正k/rounds、malformed fuzz、メモリ上限、繰り返し呼び出し。WASM panic=abort下でtrapしないことを実行テスト。（upstream prover との相互運用 fixture は未作成）
+- [x] 汎用ベンチ（部分実装）: ~1k / ~20k 相当の合成 IPA 回路で row/k、VK/PK/proof size、prove/verify wall time、peak RSS を記録。Poseidon1/Poseidon2 の R1CS 制約数・nnz・native 時間、ICP instructions/pages（cold/warm）も記録。Merkle/128-bit range を含むアプリ等価 statement、WASM pages は未実施（`docs/benchmarks-branch85.md` / `docs/ic-branch85.md`）。
+- [x] 検証器を無制限入力・CPU DoS・メモリDoSから保護。profileごとの最大k/次元・VK/証明サイズを事前検査。実測に基づく上限を文書化し、検証失敗で状態変更しない利用例を記載。
+
+## 完了条件
+Halo2 IPAのtransparent prove/verify、公開入力binding、および独立Poseidon2 API/gadgetの相互運用・WASM実行・Poseidon1非回帰が確認され、Nim/ブラウザ/ICPで正負fixtureが実行でき、計測結果・制約・再現手順付きでreleaseできること。未解決のVK復元・WASM互換性・security・性能問題は隠さずblockedと記録する。既存のKZG APIと混同しない。本番資産用途への監査済み保証は範囲外。
+
+## 参考
+- https://github.com/zcash/halo2
+- https://github.com/axiom-crypto/halo2
+- https://eprint.iacr.org/2024/1586
+
+## 進捗（2026-11-27 実装開始）
+
+### Phase 0 / 設計確定
+- [x] halo2-axiom 0.5.3 の vendored IPA を native で実測: `ParamsIPA::<G1Affine>::new(k)`（決定的 hash-to-curve）、`keygen_vk`/`keygen_pk`、`create_proof`、`verify_proof`、VK/PK の `SerdeFormat::Processed` 往復、最終 MSM を含む検証成功を確認（BN254, Blake2b, BGH19）。
+- [x] VK 復元は `VerifyingKey::read::<_, ConcreteCircuit>` が具体 Circuit 型を要求するため、**架空の汎用 VK deserialize を作らず**、crate 内の承認済み circuit id レジストリ方式にする。C ABI は登録済み id のみ受け付ける。
+- [x] Poseidon2 は pso-poseidon 0.5.0 / Noir bn254_blackbox_solver の定数を**値そのまま**vendoring し、既存 ark-bn254 0.5 の `Fr` で実装する（ark 0.6 二重依存と wasm サイズ増を回避）。KAT で Noir/Barretenberg 一致を固定。
+
+### 実装
+- [x] 共有 scaffolding: `lib.rs` / `ffi.nim` / `rustcrypto.nim` / `tests/test_algorithm.nim` に Poseidon2 / Halo2Ipa の C ABI 契約とエクスポートを登録。
+- [x] Poseidon2 Rust 本体 + R1CS gadget + KAT（`cargo test --lib poseidon2` は現在 27 tests。`--list` で確認）
+- [x] Poseidon2 Nim wrapper + WASM/CI + 異常系（`nimble test -y` / `ci/test_poseidon2_wasm.sh` 成功）
+- [x] Halo2 IPA Rust 本体（prepare/prove/verify/validate）+ fixture（`cargo test --lib halo2_ipa` は現在 25 tests。`--list` で確認）
+- [x] Halo2 IPA Nim wrapper + WASM/CI + 異常系（Nim 16 tests / `ci/test_halo2_ipa_wasm.sh` 成功）
+- [x] 統合テスト（native / wasm32-unknown-unknown / wasm32-wasip1 の実行 smoke を含む）
+- [x] Poseidon2 の Halo2 custom gate（全64 round を制約、permutation/hash 回路、KAT、IPA example）。
+- [x] Poseidon2 vs Poseidon1 の比較: R1CS 制約数・nnz・native 時間・ICP Poseidon2 hash instructions に加え、同一 k=10・同一 IPA での Halo2 rows/VK/PK/proof 比較を実装・実測（`docs/poseidon1-halo2-gate.md`, `docs/benchmarks-branch85.md`）。width 4・3 入力固定の比較デモであり C ABI 未登録。
+- [x] Browser Web Worker prove（COOP/COEP なし、`crossOriginIsolated=false`、Worker 内 prepare/prove、Node 側独立 verify）
+- [x] Poseidon2 Halo2 回路を `wasm32-wasip1` で keygen/prove/verify 実行（`ci/test_poseidon2_halo2_wasm.sh`）
+- [x] Poseidon2 Halo2 回路を C ABI/Nim に `circuit_id=2`（3 入力固定）として登録し、VK/proof fixture と Nim テストを追加
+- [x] IPA params cache feature（cold 18.2B → warm 568M instructions、約 32 分の 1）
+- [x] ICP canister（Halo2 IPA verify + Poseidon2 hash）を PocketIC で実行。mainnet deploy / dfx / Candid UI は未対応。
+- [x] 検証専用 feature `halo2-ipa-verify-only` と canister の import 最小化（`ic0` 5 関数のみ）
+- [x] 1k / 20k 相当の汎用 IPA 合成ベンチ + 環境/RSS/JSON レポート（アプリ等価ではない）
+- [x] 汎用回路記述子 / Noir frontend / Poseidon2 回路の任意 arity 登録（任意 arity `0..=12` は `0x100+n` として登録済み。汎用回路記述子 / Noir frontend は未実装）
+- [x] Poseidon2 Halo2 回路の browser Worker prove（circuit id 2、Chromium）と ICP canister verify（circuit id 2 VK を pin、PocketIC cold/warm 計測）。ICP canister 内 proving は未試行。
+
+### 進捗（2026-11-28 追記）
+- [x] Halo2 IPA の prepare/prove 二重実行を Rust 側 one-shot キャッシュで解消。Nim はサイズ取得と本体で C ABI を 2 回呼ぶが、keygen / 証明生成（`OsRng` 消費）は 1 回だけ。キャッシュは `circuit_id`/`k`/PK/witness/instances が一致する場合のみ再利用し、異なる statement には流用しない。メモリ上の one-shot であり trusted SRS ではない。公開 API / C ABI シグネチャは不変。
+- [x] Poseidon2 Halo2 の wasm panic=abort 本番経路から `.expect()` を排除。`halo_fr` は infallible な `Fr::from_raw` 変換、`hash_output` は `match` + 構造上到達不能な防御的 fallback、`synthesize` は `ok_or(Error::Synthesis)?` に変更。入力検証・エラーコード返却・native の `catch_unwind` は維持。すべての panic を排除したわけではない。
+- [x] docs の古い記述（Nim wrapper 未実装、browser/ICP 状況、テスト件数）を修正。`docs/poseidon2-bn254.md` / `docs/halo2-ipa.md` / `docs/zkp-dependencies.md` を実装済みの API・実行状況・現在のテスト件数（halo2_ipa 25 / poseidon2 27）に合わせた。
+
+### 設計まとめ（追記）
+- Halo2 IPA の profile は `halo2-axiom 0.5.3 (vendored) / BN254 G1 / Fr / IPA(BGH19) / Blake2b`。params は k から決定的に再生成し、SRS ceremony を要求しない。
+- 検証器は VK を pin する利用側責務を前提とし、VK/PK/proof/instances の長さ・magic・canonical Fr・trailing bytes・k 上限を decode/allocate 前に検査する。
+- **検証 strategy は `SingleStrategy` を使う**。`AccumulatorStrategy` は検証中に `OsRng` で乱数スカラーを生成するため、wasm32-unknown-unknown（getrandom 未提供/stub）で失敗する。単一証明検証には `SingleStrategy` が適切で、RNG/I/O 非依存の要件も満たす。
+- 証明は OS CSPRNG で blinding する。test fixture のみ固定 seed を使う。
+- circuit は crate 内登録（初期実装は `CubicV1: y = x^3 + x + 5`）とし、任意コードを入力から実行しない。Poseidon2 の Halo2 custom gate は別モジュール（`poseidon2_halo2.rs`）で全64 round を制約し、circuit id 2（3 入力固定）と `0x100+n`（n=0..=12）として C ABI/Nim に登録済み。
+- Halo2 custom gate は degree cap 5 に対応するため `x^5` を `pow2` / `pow5` の 2 ゲートに分割し、round 定数は fixed 列（VK コミット）で供給する。65 行/permutation、全 round の selector 無効化テストで各 round が実際に制約されていることを確認。
+- Browser Worker は COOP/COEP なし・`crossOriginIsolated=false`（SharedArrayBuffer 非依存）で prepare/prove を実行し、Node 側の独立 wasm でも proof を検証する。
+- ICP verifier は `halo2-ipa-verify-only` で prover/keygen と prepare/prove/pk_validate シンボルを除外し、`halo2-axiom` を `default-features=false` + vendored patch でビルドする。wasm import は `ic0` 5 関数のみ（`__wbindgen`/`getrandom`/Web Crypto なし）。Poseidon2 hash canister も同様に import を `ic0` のみに保つ。
+- ICP verify の 18.2B instructions は毎回の `ParamsIPA::new(k)`（k=8）が支配的。mainnet cycle quote ではない。
+- `halo2-ipa-params-cache` を追加し、thread-local 単一スロットに `(k, ParamsIPA)` を保持する。同一 canister instance の 2 回目以降は 568M instructions（cold 18.2B の約 1/32）。heap のみで upgrade で失われ、信頼済み SRS キャッシュではない。
+- Poseidon2 Halo2 は `circuit_id=2`（3 入力固定）として C ABI/Nim に登録した。witness=96 byte、公開入力 `[digest, in0, in1, in2]`、k>=7。fixture は `tests/fixtures/halo2_ipa_poseidon2_v1.hex`。任意 arity は `circuit_id = 0x100 + n`（n=0..=12）で登録し、witness=`32n` byte、公開入力=`n+1` 値、最小 k は行数から計算（0..3→7、4..9→8、10..12→9）。arity 12 の fixture は `tests/fixtures/halo2_ipa_poseidon2_arity12_v1.hex`。
+- Poseidon1 Halo2 は width 4・3 入力固定の比較デモとして実装した（C ABI 未登録）。同一 k=10 で Poseidon1 は Poseidon2 より VK/PK/proof が小さい（VK 682 vs 1,194 B、PK 1,475,438 vs 2,524,654 B、proof 3,488 vs 5,728 B）が、prove/verify 時間は実行ノイズが大きい。
+- Poseidon2 Halo2 回路は `wasm32-wasip1` で keygen/prove/verify を実行済み。wasm は約 9.98 MB、keygen 約 11–12 s / prove 約 6 s / verify 約 0.15 s（Node WASI、この環境）。Browser Worker では circuit id 2 を Chromium で prepare/prove/verify 済み（wasm 約 3.97 MB、prepare 約 3.5 s / prove 約 5.6 s / verify 約 2.0 s、`crossOriginIsolated=false`）。ICP では circuit id 2 の verify-only canister を PocketIC で実行（cold 18.52B / warm 866M instructions、54 pages、imports は `ic0` のみ）。canister 内 proving は未試行。
+- Poseidon2 は pso-poseidon 0.5.0 / Noir `bn254_blackbox_solver` v1.0.0-beta.22 の定数のみ vendoring し、既存 `ark-bn254` 0.5 の `Fr` で実装した（ark 0.6 の二重依存なし）。公開 hash は Noir/Barretenberg sponge であり、psonet の常時最終 permutation framing とは非ゼロ3倍数で異なる。
+- wasm 検証は「build 成功」ではなく Node 上で fixture/KAT を実行して確認した。Halo2 IPA の unknown-target module は他コード由来の host import を持つため、全 import を throw stub に置換して verify が RNG を呼ばないことを確認している。

@@ -9,12 +9,14 @@ import ./rustcrypto/algorithm/p256
 import ./rustcrypto/algorithm/bls
 import ./rustcrypto/algorithm/bn254
 import ./rustcrypto/algorithm/poseidon
+import ./rustcrypto/algorithm/poseidon2
 import ./rustcrypto/algorithm/groth16
 when not defined(wasm32):
   import ./rustcrypto/algorithm/groth16_prover
 import ./rustcrypto/algorithm/plonk
 import ./rustcrypto/algorithm/plonky2
 import ./rustcrypto/algorithm/halo2
+import ./rustcrypto/algorithm/halo2_ipa
 import ./rustcrypto/algorithm/ed25519
 import ./rustcrypto/algorithm/rsa
 import ./rustcrypto/algorithm/bcrypt
@@ -34,12 +36,14 @@ export p256
 export bls
 export bn254
 export poseidon
+export poseidon2
 export groth16
 when not defined(wasm32):
   export groth16_prover
 export plonk
 export plonky2
 export halo2
+export halo2_ipa
 export ed25519
 export rsa
 export bcrypt

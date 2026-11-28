@@ -91,6 +91,93 @@ jobs:
             ${{ runner.temp }}/halo2-kzg-bn254/environment.txt
             ${{ runner.temp }}/halo2-kzg-bn254/symbols.txt
 
+      - name: Test Halo2 IPA/BN254 native and WASM fixture smoke
+        id: halo2_ipa
+        if: ${{ !cancelled() }}
+        run: ./ci/test_halo2_ipa_wasm.sh "$RUNNER_TEMP/halo2-ipa-bn254"
+
+      - name: Upload Halo2 IPA/BN254 smoke report
+        if: ${{ !cancelled() && steps.halo2_ipa.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: halo2-ipa-bn254-smoke
+          path: |
+            ${{ runner.temp }}/halo2-ipa-bn254/environment.txt
+            ${{ runner.temp }}/halo2-ipa-bn254/symbols.txt
+
+      - name: Test Poseidon2/BN254 native and WASM KAT smoke
+        id: poseidon2
+        if: ${{ !cancelled() }}
+        run: ./ci/test_poseidon2_wasm.sh "$RUNNER_TEMP/poseidon2-bn254"
+
+      - name: Upload Poseidon2/BN254 smoke report
+        if: ${{ !cancelled() && steps.poseidon2.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: poseidon2-bn254-smoke
+          path: |
+            ${{ runner.temp }}/poseidon2-bn254/environment.txt
+            ${{ runner.temp }}/poseidon2-bn254/symbols.txt
+
+      - name: Test Poseidon2 Halo2 gate on wasm32-wasip1
+        id: poseidon2_halo2_wasm
+        if: ${{ !cancelled() }}
+        run: ./ci/test_poseidon2_halo2_wasm.sh "$RUNNER_TEMP/poseidon2-halo2-wasm"
+
+      - name: Upload Poseidon2 Halo2 gate wasm report
+        if: ${{ !cancelled() && steps.poseidon2_halo2_wasm.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: poseidon2-halo2-gate-wasm
+          path: |
+            ${{ runner.temp }}/poseidon2-halo2-wasm/environment.txt
+            ${{ runner.temp }}/poseidon2-halo2-wasm/measurements.json
+            ${{ runner.temp }}/poseidon2-halo2-wasm/native.json
+            ${{ runner.temp }}/poseidon2-halo2-wasm/wasm.json
+
+      - name: Test Halo2 IPA/BN254 prove in a browser Web Worker
+        id: halo2_ipa_web
+        if: ${{ !cancelled() }}
+        run: ./ci/test_halo2_ipa_web.sh "$RUNNER_TEMP/halo2-ipa-web"
+
+      - name: Upload Halo2 IPA/BN254 browser report
+        if: ${{ !cancelled() && steps.halo2_ipa_web.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: halo2-ipa-bn254-browser
+          path: |
+            ${{ runner.temp }}/halo2-ipa-web/environment.txt
+            ${{ runner.temp }}/halo2-ipa-web/*.json
+
+      - name: Test branch-85 ICP canisters under PocketIC
+        id: ic_branch85
+        if: ${{ !cancelled() }}
+        run: ./ci/test_ic_branch85.sh "$RUNNER_TEMP/ic-branch85"
+
+      - name: Upload branch-85 ICP measurements
+        if: ${{ !cancelled() && steps.ic_branch85.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ic-branch85-measurements
+          path: |
+            ${{ runner.temp }}/ic-branch85/ic-measurements.json
+
+      - name: Run branch-85 native benchmarks
+        id: bench_branch85
+        if: ${{ !cancelled() }}
+        run: ./ci/benchmarks_branch85.sh "$RUNNER_TEMP/bench-branch85"
+
+      - name: Upload branch-85 benchmark reports
+        if: ${{ !cancelled() && steps.bench_branch85.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: branch-85-benchmarks
+          path: |
+            ${{ runner.temp }}/bench-branch85/environment.txt
+            ${{ runner.temp }}/bench-branch85/poseidon-bench.json
+            ${{ runner.temp }}/bench-branch85/ipa-bench.json
+            ${{ runner.temp }}/bench-branch85/rss.txt
+
   # Linux x86_64 上の開発用 Docker イメージで、既存の test.sh（Rust + wasm/wasi クロスビルド + Nim）を実行する。
   linux-x86_64-docker-compose:
     name: Linux x86_64 (Docker)

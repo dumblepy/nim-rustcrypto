@@ -3,6 +3,11 @@
 This repository adds four independent proof-verification backends. They do not share
 proof formats. The versions below are pinned in `rustcrypto-ffi/Cargo.lock`.
 
+Branch 85 additionally defines a transparent IPA profile and a Poseidon2 hash
+API. Both are implemented and exercised by native unit/Nim tests and by runtime
+WASM smokes for `wasm32-unknown-unknown` and `wasm32-wasip1`. They are new
+profiles/APIs, not replacements for the existing KZG/Groth16 verifiers.
+
 | Crate | Version | License | Used for | Targets |
 |---|---|---|---|---|
 | `ark-bn254` | 0.5.0 | MIT OR Apache-2.0 | BN254 Fr/Fq/G1/G2 | all |
@@ -55,6 +60,113 @@ so wasm can build without atomics, plus warning-only cleanups. See
 update steps. `ci/check_halo2_axiom_warnings.sh` enforces `-D warnings` for native
 and both wasm targets in the `ZKP integration` job.
 
+## Branch 85: transparent IPA / Poseidon2 (2026-11-27)
+
+Branch 85 adds no new proof-system crate or crate version. The transparent IPA
+profile uses the existing vendored `halo2-axiom` 0.5.3 (the branch adds it as a
+direct dependency edge; the crate/version was already present through the KZG
+stack). The Poseidon2 implementation vendors constants only.
+
+### Halo2 IPA / BN254 (implemented, verified natively and on both wasm targets)
+
+The IPA profile uses the same `halo2-axiom` 0.5.3 copy as the KZG profile. The
+local vendored patch is unchanged; see `rustcrypto-ffi/third_party/PATCH.md`.
+
+| Crate / item | Version | License | Role in this branch | Notes |
+|---|---|---|---|---|
+| `halo2-axiom` (vendored) | 0.5.3 | MIT OR Apache-2.0 | IPA commitment, keygen, prove/verify; BN254 G1 / Fr; Blake2b transcript | Local patch removes `multicore` from the default feature list for wasm; native re-enables it. Registry checksum `18316396f9bc7dcd6ac1602443ea4f83f2c93fa5abe448a28db3abceb9c7aab3`; published from `5e4f0e524956f23b50d51b3a2f7bb07834948598` (`halo2_proofs/`). Warning-only cleanups are recorded in `PATCH.md`. |
+| `snark-verifier` | 0.2.7 | MIT | **KZG profile only** (`src/halo2.rs`); not used by the IPA profile | crates.io metadata reports `rust_version = 1.91.1`; repository `axiom-crypto/snark-verifier`. Do not use it as an IPA verifier. |
+| `bincode` | 1.3.3 | MIT | KZG protocol encoding | Unchanged. The IPA wire format is defined in `rustcrypto-ffi/src/halo2_ipa.rs` and does not use this KZG encoding. |
+| IPA params / VK | — | — | Deterministic `ParamsIPA::new(k)`; approved circuit-id registry | No SRS ceremony and no caller-supplied generators. VK deserialization requires a concrete circuit type, so the crate accepts only built-in approved circuit ids. |
+
+Status: the Rust API contract, v1 wire formats (`RCH2IPV1`, `RCH2IPP1`,
+`RCH2IPF1`, `RCH2IPI1`), Nim type-first wrapper, and a committed fixture are in
+this branch. Verified in the development container (2026-11-27):
+
+- `cargo test --lib halo2_ipa`: 25 passed
+  (`cargo test --locked --lib halo2_ipa -- --list` reports 25 tests). This
+  includes the one-shot cache tests: sizing + body share a single keygen
+  (`prepare_sizing_and_body_share_one_keygen`) and a single proof generation
+  (`prove_sizing_and_body_share_one_proof`), short-output retries reuse the
+  cache, different `k`/`circuit_id` regenerate, and a changed statement never
+  reuses an old proof.
+- `nimble test -y`: includes the 16 Nim tests for IPA.
+- `ci/test_halo2_ipa_wasm.sh`: native, `wasm32-wasip1`, and
+  `wasm32-unknown-unknown` verify the committed fixture. The unknown-target
+  module has host imports from unrelated code paths, so the smoke replaces every
+  function import with a throwing stub; verification still succeeds, confirming
+  that it does not call `getrandom`/OS RNG. The verify path uses
+  `SingleStrategy`; `AccumulatorStrategy` was rejected because it samples a
+  random scalar during verification.
+- The example circuit is a small built-in cubic demo, not a general R1CS
+  frontend. The Poseidon2 custom-gate circuit in `src/poseidon2_halo2.rs` is
+  registered in the C ABI/Nim registry as circuit id `2` (3-input fixed) and as
+  `0x100+n` for arity `n = 0..=12`; arbitrary user circuits and a Noir frontend
+  are still not supported.
+- The verify-only feature `halo2-ipa-verify-only` excludes prover/keygen and the
+  `prepare`/`prove` symbols. The ICP verifier canister builds with it and has
+  only the five `ic0` imports (no `__wbindgen`/`getrandom`/Web Crypto imports).
+  See `docs/ic-branch85.md` for the PocketIC measurements.
+- Browser Web Worker proving and native benchmark reports are documented in
+  `docs/halo2-ipa.md` and `docs/benchmarks-branch85.md`.
+
+### Poseidon2 / BN254 constants
+
+Poseidon2 is a hash API, not a verifier backend. It adds **no runtime
+dependency**: the constants are vendored into
+`rustcrypto-ffi/src/poseidon2.rs`, and `pso-poseidon` does not appear in
+`rustcrypto-ffi/Cargo.lock`.
+
+| Item | Version | License | Use | Notes |
+|---|---|---|---|---|
+| `pso-poseidon` | 0.5.0 | MIT | Provenance of the BN254 Poseidon2 round constants, internal diagonal, and linear layers | crates.io metadata: repository `psonet/pso-poseidon`, crate size 385,441 bytes. Constants only; no runtime dependency. |
+| Noir `bn254_blackbox_solver` | `v1.0.0-beta.22` | Apache-2.0 | Upstream reference for the constants and the Noir/Barretenberg sponge | Constants are copied via `pso-poseidon` 0.5.0. Not linked at runtime. |
+| `ark-bn254` | 0.5.0 | MIT OR Apache-2.0 | BN254 `Fr` arithmetic for the implementation | Existing dependency; no `ark` 0.6 duplicate is introduced for Poseidon2. |
+
+Parameters recorded in the source: width `t = 4`, rate `3`, capacity `1`,
+S-box `x^5`, `R_F = 8`, `R_P = 56`. Verified in the development container
+(2026-11-27):
+
+- `cargo test --lib poseidon2`: 27 tests
+  (`cargo test --locked --lib poseidon2 -- --list` reports 27 tests; the filter
+  also matches the four Poseidon2-related `halo2_ipa` tests). The native and
+  gadget suites include the permutation KAT, the Noir sponge KAT for
+  `n = 0..=7`, and the R1CS gadget KAT. The Halo2 gate suite adds
+  `hash_output_never_panics_for_supported_arities` and
+  `halo_fr_matches_canonical_representation_for_all_constants`, which cover the
+  removal of panic-capable `.expect()` calls from the wasm `panic = "abort"`
+  production path.
+- `nimble test -y`: includes the Poseidon2 Nim tests and the unchanged
+  Poseidon1 regression suite.
+- `ci/test_poseidon2_wasm.sh`: native, `wasm32-wasip1`, and
+  `wasm32-unknown-unknown` execute the KATs; the unknown-target cdylib has
+  **zero imports** (no RNG/host services).
+
+The framing is the Noir/Barretenberg sponge, not the psonet framing; the source
+comment and tests are explicit about this distinction.
+
+### Branch 85 target status
+
+| Item | Native | `wasm32-unknown-unknown` | `wasm32-wasip1` | Nim | Status |
+|---|---|---|---|---|---|
+| Poseidon2 / BN254 | Rust KAT + Nim tests pass | Runtime smoke pass (0 imports) | Runtime smoke pass | Yes | Implemented |
+| Poseidon2 Halo2 gate | MockProver KATs + IPA example pass | Not executed | Runtime prove/verify pass (Node WASI) | Yes (circuit id 2 + `0x100+n` 0..=12) | Implemented |
+| Poseidon2 Halo2 browser/ICP | — | Chromium Web Worker prove id 2 | — | No | Implemented (browser prove, ICP verify) |
+| Poseidon1 Halo2 gate | MockProver KAT + IPA comparison pass | Not executed | Not executed | No (comparison demo) | Implemented |
+| Halo2 IPA / BN254 | Rust fixtures + Nim tests pass | Runtime smoke pass (host imports stubbed to throw) | Runtime smoke pass | Yes | Implemented (cubic + Poseidon2 hash3) |
+| Halo2 IPA browser prove | — | Chromium Web Worker, `crossOriginIsolated=false` | — | No | Implemented (cubic circuit) |
+| Halo2 IPA ICP verify | PocketIC update call | verify-only canister, `ic0`-only imports, params cache cold/warm | — | No | Implemented (not mainnet) |
+| Poseidon2 IPA ICP verify | PocketIC update call (id 2 VK pinned) | verify-only canister, `ic0`-only imports, cold/warm | — | No | Implemented (not mainnet) |
+| Poseidon2 ICP hash | PocketIC update call | canister, `ic0`-only imports | — | No | Implemented (not mainnet) |
+
+The table is a status record. A successful compile alone is not treated as
+success; the wasm entries are actual Node/WASI/Chromium executions and the ICP
+entries are PocketIC update calls. Measurement references:
+`docs/benchmarks-branch85.md`, `docs/ic-branch85.md`, `docs/halo2-ipa.md`,
+`docs/poseidon2-halo2-gate.md`, `docs/poseidon2-halo2-wasm.md`,
+`docs/poseidon1-halo2-gate.md`. Mainnet cycle quotes and a production `dfx`
+deployment are not included.
+
 ## Native smoke benchmark (indicative only)
 
 Measured once in the development container (Linux x86_64, release Rust archive,
@@ -71,5 +183,7 @@ Nim `-d:release`), verifying the committed fixtures with a warm process. These a
 Static archive sizes in this build after enabling Halo2 on wasm and protocol-shape
 validation: Linux x86_64 49,496,168 bytes (~47.2 MiB), `wasm32-unknown-unknown`
 33,142,524 bytes (~31.6 MiB), `wasm32-wasip1` 32,237,204 bytes (~30.7 MiB). These
-are raw `.a` sizes, not compressed release assets. Memory usage, instruction counts,
-and wasm runtime timings were not measured.
+are raw `.a` sizes, not compressed release assets. Memory usage, instruction
+counts, and wasm runtime timings are outside this native smoke benchmark; the
+branch-85 wasm/ICP measurements are in `docs/benchmarks-branch85.md` and
+`docs/ic-branch85.md`.
