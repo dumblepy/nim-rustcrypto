@@ -56,7 +56,7 @@ main tree ac043d851706b342df1b38292c0f6df1316682e8 を調査。関連 #69, #70, 
 - [ ] Ubuntu native、macOS arm64、wasm32-unknown-unknown、wasm32-wasip1 のビルド・実行fixture。Browser Web Workerでprove、同一バイナリをRust/Nim native/両WASMでverify。SharedArrayBuffer不要のsingle-thread fallbackも確認。ICP向けNim static link、Wasm imports/validation/function complexity、PocketIC deploy/verifyの実行例または再現手順。ビルド成功を実行成功とみなさない。（Ubuntu native と両 wasm の verify 実行は完了。macOS arm64 / Browser Worker prove / ICP・PocketIC は未検証）
 - [x] docs/halo2-ipa.md / docs/spartan-whir.md / docs/zkp-dependencies.md / README / release artifacts、symbols、SHA256、toolchain、CI scripts更新。
 - [x] 既存Groth16/KZG/BP/HPKEその他の回帰テスト。誤proof/VK/params/public input/順序/field/curve/profile、切断・末尾余剰、過大長、NULL、不正点、不正k/rounds、malformed fuzz、メモリ上限、繰り返し呼び出し。WASM panic=abort下でtrapしないことを実行テスト。（upstream prover との相互運用 fixture は未作成）
-- [ ] 汎用ベンチ: BN254 Poseidon相当の小規模 ~1k と ~20k R1CS相当（複数の秘密Merkle path、128-bit rangeなどを含む）の同等statement、正負fixture。実際のrow/k/padding/sparse entries、security、raw/transport proof bytes、public artifact/PK/VK size、prove/verify wall time、peak RSS/WASM pages、cold/warm、ICP instructions/update cycles、WASM sizeを記録。IPA generator/VK復元とWHIR artifact decode/prepareを含め、warm cacheだけを報告しない。（k=8 デモ回路のサイズと wasm 成果物サイズのみ記録。~1k/~20k R1CS ベンチは未実施）
+- [x] 汎用ベンチ（部分実装）: ~1k / ~20k 相当の合成 IPA 回路で row/k、VK/PK/proof size、prove/verify wall time、peak RSS を記録。Poseidon1/Poseidon2 の R1CS 制約数・nnz・native 時間、ICP instructions/pages も記録。Merkle/128-bit range を含むアプリ等価 statement、cold/warm、WASM pages、WHIR は未実施（`docs/benchmarks-branch85.md` / `docs/ic-branch85.md`）。
 - [x] 検証器を無制限入力・CPU DoS・メモリDoSから保護。profileごとの最大k/次元・VK/証明サイズを事前検査。実測に基づく上限を文書化し、検証失敗で状態変更しない利用例を記載。
 
 ## 完了条件
@@ -86,9 +86,13 @@ main tree ac043d851706b342df1b38292c0f6df1316682e8 を調査。関連 #69, #70, 
 - [x] Halo2 IPA Rust 本体（prepare/prove/verify/validate）+ fixture（`cargo test --lib halo2_ipa` 11 passed）
 - [x] Halo2 IPA Nim wrapper + WASM/CI + 異常系（Nim 7+2 tests / `ci/test_halo2_ipa_wasm.sh` 成功）
 - [x] 統合テスト（native / wasm32-unknown-unknown / wasm32-wasip1 の実行 smoke を含む）
-- [ ] Poseidon2 の Halo2 custom gate / Spartan+WHIR Poseidon2 gadget（未実装）
-- [ ] Poseidon2 vs Poseidon1 の制約数・WASM instructions/cycles 実測比較（未計測）
-- [ ] 汎用回路記述子 / Noir frontend / ICP canister deploy（未実装・別 phase）
+- [x] Poseidon2 の Halo2 custom gate（全64 round を制約、permutation/hash 回路、KAT、IPA example）。Spartan+WHIR Poseidon2 gadget は Spartan+WHIR 自体が blocked のため未実装。
+- [ ] Poseidon2 vs Poseidon1 の比較（部分実装）: R1CS 制約数・nnz・native 時間・ICP Poseidon2 hash instructions は実測。Poseidon1 の Halo2 gate が無いため Halo2 rows/proof size は apples-to-apples 比較不可。
+- [x] Browser Web Worker prove（COOP/COEP なし、`crossOriginIsolated=false`、Worker 内 prepare/prove、Node 側独立 verify）
+- [x] ICP canister（Halo2 IPA verify + Poseidon2 hash）を PocketIC で実行。mainnet deploy / dfx / Candid UI は未対応。
+- [x] 検証専用 feature `halo2-ipa-verify-only` と canister の import 最小化（`ic0` 5 関数のみ）
+- [x] 1k / 20k 相当の汎用 IPA 合成ベンチ + 環境/RSS/JSON レポート（アプリ等価ではない）
+- [ ] 汎用回路記述子 / Noir frontend / Poseidon2 回路の C ABI circuit id 登録（未実装・別 phase）
 - [x] Spartan+WHIR Phase 0 調査 + blocked ADR（`docs/spartan-whir.md`, `docs/adr/ADR-0085-spartan-whir.md`）
 
 ### 設計まとめ（追記）
@@ -96,6 +100,10 @@ main tree ac043d851706b342df1b38292c0f6df1316682e8 を調査。関連 #69, #70, 
 - 検証器は VK を pin する利用側責務を前提とし、VK/PK/proof/instances の長さ・magic・canonical Fr・trailing bytes・k 上限を decode/allocate 前に検査する。
 - **検証 strategy は `SingleStrategy` を使う**。`AccumulatorStrategy` は検証中に `OsRng` で乱数スカラーを生成するため、wasm32-unknown-unknown（getrandom 未提供/stub）で失敗する。単一証明検証には `SingleStrategy` が適切で、RNG/I/O 非依存の要件も満たす。
 - 証明は OS CSPRNG で blinding する。test fixture のみ固定 seed を使う。
-- circuit は crate 内登録（初期実装は `CubicV1: y = x^3 + x + 5`）とし、任意コードを入力から実行しない。Poseidon2 の Halo2 custom gate は本ブランチの未達項目として明記する。
+- circuit は crate 内登録（初期実装は `CubicV1: y = x^3 + x + 5`）とし、任意コードを入力から実行しない。Poseidon2 の Halo2 custom gate は別モジュール（`poseidon2_halo2.rs`）で全64 round を制約する Rust-only デモとして実装し、既存 C ABI の circuit id には未登録。
+- Halo2 custom gate は degree cap 5 に対応するため `x^5` を `pow2` / `pow5` の 2 ゲートに分割し、round 定数は fixed 列（VK コミット）で供給する。65 行/permutation、全 round の selector 無効化テストで各 round が実際に制約されていることを確認。
+- Browser Worker は COOP/COEP なし・`crossOriginIsolated=false`（SharedArrayBuffer 非依存）で prepare/prove を実行し、Node 側の独立 wasm でも proof を検証する。
+- ICP verifier は `halo2-ipa-verify-only` で prover/keygen と prepare/prove/pk_validate シンボルを除外し、`halo2-axiom` を `default-features=false` + vendored patch でビルドする。wasm import は `ic0` 5 関数のみ（`__wbindgen`/`getrandom`/Web Crypto なし）。Poseidon2 hash canister も同様に import を `ic0` のみに保つ。
+- ICP verify の 18.2B instructions は毎回の `ParamsIPA::new(k)`（k=8）が支配的。params キャッシュやバッチ検証は未実装であり、mainnet cycle quote ではない。
 - Poseidon2 は pso-poseidon 0.5.0 / Noir `bn254_blackbox_solver` v1.0.0-beta.22 の定数のみ vendoring し、既存 `ark-bn254` 0.5 の `Fr` で実装した（ark 0.6 の二重依存なし）。公開 hash は Noir/Barretenberg sponge であり、psonet の常時最終 permutation framing とは非ゼロ3倍数で異なる。
 - wasm 検証は「build 成功」ではなく Node 上で fixture/KAT を実行して確認した。Halo2 IPA の unknown-target module は他コード由来の host import を持つため、全 import を throw stub に置換して verify が RNG を呼ばないことを確認している。

@@ -36,7 +36,8 @@ The **Halo2 IPA/BN254** profile (no trusted setup) and **Poseidon2/BN254** are a
 verified on both wasm targets. Their wasm smokes execute the committed KATs/fixture
 under Node. The Poseidon2 cdylib has zero host imports; the IPA verifier is executed
 with every imported host function replaced by a throwing stub, proving the verify
-path does not request RNG or OS services. See
+path does not request RNG or OS services. Browser Web Worker proving and a
+verify-only ICP canister (PocketIC-measured) are included. See
 [Halo2 IPA docs](docs/halo2-ipa.md) and [Poseidon2 docs](docs/poseidon2-bn254.md).
 Spartan+WHIR is not shipped in this branch: the Phase 0 gate is recorded as blocked
 in [Spartan+WHIR](docs/spartan-whir.md) and
@@ -91,12 +92,15 @@ Per-primitive and per-protocol guides (English):
 - [BN254 fields and curve encodings](docs/bn254.md)
 - [Poseidon / BN254](docs/poseidon-bn254.md)
 - [Poseidon2 / BN254 (Noir/Barretenberg-compatible)](docs/poseidon2-bn254.md)
+- [Poseidon2 / BN254 Halo2 custom gate (Rust demo)](docs/poseidon2-halo2-gate.md)
 - [Groth16 / BN254 verifier](docs/groth16-bn254.md)
 - [PLONK / BN254 verifier (genshi-core profile)](docs/plonk-bn254.md)
 - [Plonky2 / Goldilocks / FRI verifier](docs/plonky2.md)
 - [Halo2 KZG / BN254 verifier (PSE/Axiom SHPLONK profile)](docs/halo2.md)
 - [Halo2 IPA / BN254 (transparent, no trusted setup)](docs/halo2-ipa.md)
 - [Spartan+WHIR Phase 0 (blocked)](docs/spartan-whir.md)
+- [Branch 85 benchmarks (Poseidon1/Poseidon2, IPA 1k/20k)](docs/benchmarks-branch85.md)
+- [ICP canisters (IPA verify / Poseidon2 hash)](docs/ic-branch85.md)
 - [ZKP verifier dependencies, licenses, and target matrix](docs/zkp-dependencies.md)
 - [Bulletproofs R1CS / Ristretto255 prover and verifier (opt-in PoC)](docs/bulletproofs-r1cs.md)
 

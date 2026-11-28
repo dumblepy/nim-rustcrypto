@@ -245,9 +245,9 @@ WASM smoke（release、`ci/test_halo2_ipa_wasm.sh`）の出力サイズ:
 
 | ターゲット | 成果物 | サイズ |
 |---|---|---:|
-| `wasm32-wasip1` | `halo2_ipa_verify.wasm` | 9,062,107 バイト |
-| `wasm32-unknown-unknown` | `halo2_ipa_verify_web.wasm` | 9,421,082 バイト |
-| `wasm32-unknown-unknown` | `librust_crypto_ffi.a` | 35,250,958 バイト |
+| `wasm32-wasip1` | `halo2_ipa_verify.wasm` | 9,004,435 バイト |
+| `wasm32-unknown-unknown` | `halo2_ipa_verify_web.wasm` | 9,363,925 バイト |
+| `wasm32-unknown-unknown` | `librust_crypto_ffi.a` | 35,277,024 バイト |
 
 `wasm32-unknown-unknown` は module を instantiate して verify に成功した。この
 module は他モジュール由来の host 関数 import を持つが、smoke は全 import を
@@ -283,16 +283,34 @@ WASM の命令数・cycle・peak memory は未計測。
 
 ## 未対応（明示）
 
-- Poseidon2 の Halo2 カスタムゲート（別モジュールの Poseidon2 とは独立）。
+- **Poseidon2 の Halo2 custom gate は Rust typed API のデモ専用**。
+  `src/poseidon2_halo2.rs` と `examples/poseidon2_halo2_ipa.rs` に全64 round を
+  制約する回路と IPA 証明/検証があるが、`rustcrypto_halo2_ipa_bn254_*` の
+  circuit id には未登録で、Nim からは呼べない。詳細は
+  [`poseidon2-halo2-gate.md`](poseidon2-halo2-gate.md)。
 - 任意の回路記述子 / Noir フロントエンド。回路は Rust のレジストリに
   コンパイル時登録されたものだけ。
-- ICP canister 統合。
-- **検証専用 feature / アーカイブ分離は未実装**。現状の wasm アーカイブは
-  prover や他モジュール由来の `getrandom` / wasm-bindgen import を含み得る。
-  実行時には verify がそれらを呼ばないことを throw-stub smoke で確認している
-  が、canister の import 定義や dead-code elimination を最小化するには
-  検証専用ビルドの追加が必要。
-- ~1k / ~20k R1CS 相当の汎用ベンチ、browser Web Worker prove、ICP の
-  instructions/cycle 計測。
 - 一般的な R1CS フロントエンドとしての利用。本モジュールは小さなデモ回路
   （cubic v1）専用である。
+- Poseidon1 の Halo2 custom gate は未実装のため、Poseidon1 vs Poseidon2 の
+  Halo2 rows/proof size 比較は apples-to-apples ではない。
+
+## 実装済みになった項目
+
+- **検証専用 feature**: `halo2-ipa-verify-only` で prover/keygen と
+  `prepare`/`prove`/`pk_validate` シンボルを除外できる。ICP verifier canister
+  はこの feature でビルドし、wasm import が `ic0` の 5 関数のみであることを
+  確認済み。詳細は [`ic-branch85.md`](ic-branch85.md)。この feature は
+  prover API を削除するため、fixture generator や Nim の `prepare`/`prove`
+  を同時に使うビルドでは有効にしない。
+- **ICP canister**: VK をビルド時に pin した raw update verifier を PocketIC で
+  実行済み。instructions 18,226,458,332（k=8、params 再生成を含む）、
+  memory 53 pages。
+- **Browser Web Worker prove**: COOP/COEP なし・`crossOriginIsolated=false` の
+  Chromium で Worker 内 prepare/prove を実行し、Node 側の独立 wasm でも検証。
+  実測（k=8、cubic v1）: prepare 約 1.9–4.1 s、prove 約 2.6–4.9 s、
+  verify 約 1.6–2.2 s、wasm 3,697,155 B、linear memory は prepare 約 3.9 MB /
+  prove・verify 約 8.1 MB。`SharedArrayBuffer` は不使用。
+- **ベンチ**: R1CS 形状・native 時間・IPA 1k/20k 相当の合成回路を実測。
+  [`benchmarks-branch85.md`](benchmarks-branch85.md)。なお 20k 回路は
+  アプリケーション等価ではなく形状ベンチである。

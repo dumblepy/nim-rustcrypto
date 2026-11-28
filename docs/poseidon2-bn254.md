@@ -222,9 +222,11 @@ gadget とネイティブの一致を `cargo test --lib poseidon2` で確認す�
 
 ## 未実装・対象外
 
-- **Halo2 custom gate は実装していない。** 本ブランチはネイティブ実装、C ABI、
-  ark-r1cs-std の R1CS gadget、Nim wrapper、WASM smoke、KAT、ドキュメントまでを
-  対象とする。Halo2 IPA 側の回路は別のデモ回路のみで、Poseidon2 制約は含まない。
-- Poseidon1 と Poseidon2 の制約数・WASM instructions/cycles・証明時間の比較は
-  未計測。
+- **Poseidon2 の Halo2 custom gate は別モジュールで実装済み**。
+  [`poseidon2-halo2-gate.md`](poseidon2-halo2-gate.md) を参照。ネイティブの
+  Rust typed API/example のみで、Nim/C ABI の circuit id には未登録。
+- Poseidon1 と Poseidon2 の Halo2 rows/proof size 比較は、Poseidon1 の Halo2
+  gate が無いため apples-to-apples ではない。R1CS 制約数・nnz・native 時間・
+  ICP Poseidon2 hash instructions は [`benchmarks-branch85.md`](benchmarks-branch85.md)
+  と [`ic-branch85.md`](ic-branch85.md) に記録。
 - Spartan/WHIR 側の Poseidon2 gadget は Spartan+WHIR 自体が blocked のため未実装。

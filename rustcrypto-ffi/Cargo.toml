@@ -88,6 +88,10 @@ rand = "0.8"
 [features]
 bulletproofs-r1cs-poc = ["dep:bulletproofs", "dep:curve25519-dalek", "dep:merlin"]
 bulletproofs-r1cs-web-poc = ["bulletproofs-r1cs-poc", "dep:wasm-bindgen"]
+# Verifier-only build: excludes the prover/keygen code paths and the
+# `rustcrypto_halo2_ipa_bn254_prepare` / `..._prove` symbols, so an ICP
+# canister verifier does not link OS entropy or prover dependencies.
+halo2-ipa-verify-only = []
 
 [[example]]
 name = "bulletproofs_r1cs_web"

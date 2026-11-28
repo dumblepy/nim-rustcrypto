@@ -59,11 +59,14 @@
 
 use crate::{
     RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA, RUSTCRYPTO_ERR_INVALID_FIELD_ELEMENT,
-    RUSTCRYPTO_ERR_INVALID_LENGTH, RUSTCRYPTO_ERR_INVALID_PARAMETER,
-    RUSTCRYPTO_ERR_INVALID_PROOF_FORMAT, RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT,
-    RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY, RUSTCRYPTO_ERR_NULL_INPUT_WITH_DATA,
-    RUSTCRYPTO_ERR_NULL_OUTPUT, RUSTCRYPTO_ERR_OUTPUT_TOO_SHORT, RUSTCRYPTO_ERR_PANIC,
-    RUSTCRYPTO_ERR_VERIFICATION_FAILED, RUSTCRYPTO_OK,
+    RUSTCRYPTO_ERR_INVALID_LENGTH, RUSTCRYPTO_ERR_INVALID_PROOF_FORMAT,
+    RUSTCRYPTO_ERR_INVALID_PUBLIC_INPUT_COUNT, RUSTCRYPTO_ERR_INVALID_VERIFYING_KEY,
+    RUSTCRYPTO_ERR_NULL_INPUT_WITH_DATA, RUSTCRYPTO_ERR_PANIC, RUSTCRYPTO_ERR_VERIFICATION_FAILED,
+    RUSTCRYPTO_OK,
+};
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+use crate::{
+    RUSTCRYPTO_ERR_INVALID_PARAMETER, RUSTCRYPTO_ERR_NULL_OUTPUT, RUSTCRYPTO_ERR_OUTPUT_TOO_SHORT,
 };
 use core::cell::Cell;
 use core::ffi::c_int;
@@ -72,18 +75,23 @@ use halo2_axiom::circuit::{Layouter, SimpleFloorPlanner, Value};
 use halo2_axiom::halo2curves::bn256::{Fr, G1Affine};
 use halo2_axiom::halo2curves::ff::PrimeField;
 use halo2_axiom::plonk::{
-    Advice, Assigned, Circuit, Column, ConstraintSystem, Error, Expression, ProvingKey, Selector,
-    VerifyingKey, create_proof, keygen_pk, keygen_vk, verify_proof,
+    Advice, Assigned, Circuit, Column, ConstraintSystem, Error, Expression, Selector, VerifyingKey,
+    verify_proof,
 };
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+use halo2_axiom::plonk::{ProvingKey, create_proof, keygen_pk, keygen_vk};
 use halo2_axiom::poly::Rotation;
 use halo2_axiom::poly::VerificationStrategy;
 use halo2_axiom::poly::commitment::ParamsProver;
 use halo2_axiom::poly::ipa::commitment::{IPACommitmentScheme, ParamsIPA};
-use halo2_axiom::poly::ipa::multiopen::{ProverIPA, VerifierIPA};
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+use halo2_axiom::poly::ipa::multiopen::ProverIPA;
+use halo2_axiom::poly::ipa::multiopen::VerifierIPA;
 use halo2_axiom::poly::ipa::strategy::SingleStrategy;
-use halo2_axiom::transcript::{
-    Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
-};
+use halo2_axiom::transcript::{Blake2bRead, Challenge255, TranscriptReadBuffer};
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
+use halo2_axiom::transcript::{Blake2bWrite, TranscriptWriterBuffer};
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 use rand_core::{OsRng, RngCore};
 use std::io::{Cursor, Read};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -106,6 +114,7 @@ pub const HALO2_IPA_BN254_MAX_INSTANCE_COLUMNS: usize = 8;
 pub const HALO2_IPA_BN254_MAX_INSTANCE_VALUES: usize = 4096;
 
 const VK_HEADER_LEN: usize = 8 + 4 + 4 + 4;
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 const PK_HEADER_LEN: usize = 8 + 4 + 4 + 4;
 const PROOF_HEADER_LEN: usize = 8 + 4;
 const INSTANCES_HEADER_LEN: usize = 8 + 4;
@@ -115,6 +124,7 @@ const MAX_INSTANCES_BLOB_LEN: usize = INSTANCES_HEADER_LEN
 
 const FR_BYTES: usize = 32;
 const MAX_FIXED_COMMITMENTS: u32 = 256;
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 const MAX_PK_POLY_VECTOR_LEN: usize = 64;
 
 /// The only approved circuit. Mirrors the native prototype exactly.
@@ -184,6 +194,7 @@ fn valid_k(k: u32) -> bool {
     (HALO2_IPA_BN254_MIN_K..=HALO2_IPA_BN254_MAX_K).contains(&k)
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn circuit_without_witnesses(circuit_id: u32) -> Result<CubicCircuitV1, c_int> {
     match circuit_id {
         HALO2_IPA_BN254_CIRCUIT_CUBIC_V1 => Ok(CubicCircuitV1::default()),
@@ -236,6 +247,7 @@ fn push_u32_be(out: &mut Vec<u8>, value: u32) {
 // v1 encoders (also used by the fixture example)
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn encode_vk_blob(circuit_id: u32, k: u32, vk_bytes: &[u8]) -> Result<Vec<u8>, c_int> {
     if !valid_circuit_id(circuit_id) {
         return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
@@ -253,6 +265,7 @@ fn encode_vk_blob(circuit_id: u32, k: u32, vk_bytes: &[u8]) -> Result<Vec<u8>, c
     Ok(out)
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn encode_pk_blob(circuit_id: u32, k: u32, pk_bytes: &[u8]) -> Result<Vec<u8>, c_int> {
     if !valid_circuit_id(circuit_id) {
         return Err(RUSTCRYPTO_ERR_INVALID_CIRCUIT_DATA);
@@ -407,6 +420,7 @@ fn parse_vk(bytes: &[u8]) -> Result<(u32, VerifyingKey<G1Affine>), c_int> {
 
 /// Walks the canonical `ProvingKey` serialization *without* allocating, so a
 /// hostile polynomial length cannot reach `Polynomial::read`'s `Vec` reserve.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn skip_pk_polynomial(
     bytes: &[u8],
     offset: usize,
@@ -428,6 +442,7 @@ fn skip_pk_polynomial(
     Ok(end)
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn skip_pk_polynomial_vector(
     bytes: &[u8],
     offset: usize,
@@ -446,6 +461,7 @@ fn skip_pk_polynomial_vector(
     Ok(offset)
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn validate_pk_layout(bytes: &[u8], vk_end: usize, k: u32) -> Result<(), c_int> {
     let max_poly_len = 1usize << k; // k <= 16, checked before this call
     let mut offset = vk_end;
@@ -481,6 +497,7 @@ fn validate_pk_layout(bytes: &[u8], vk_end: usize, k: u32) -> Result<(), c_int> 
     Ok(())
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn parse_pk(bytes: &[u8]) -> Result<(u32, ProvingKey<G1Affine>), c_int> {
     if bytes.len() < PK_HEADER_LEN {
         return Err(RUSTCRYPTO_ERR_INVALID_LENGTH);
@@ -616,6 +633,7 @@ fn parse_single_instance(bytes: &[u8]) -> Result<Fr, c_int> {
 // Key generation / proving helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn key_material(circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int> {
     if !valid_circuit_id(circuit_id) || !valid_k(k) {
         return Err(RUSTCRYPTO_ERR_INVALID_PARAMETER);
@@ -640,15 +658,18 @@ fn key_material(circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int> {
 }
 
 /// Generates v1 VK/PK blobs for an approved circuit. Fixture/test support.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 #[doc(hidden)]
 pub fn generate_key_material_v1(circuit_id: u32, k: u32) -> Result<(Vec<u8>, Vec<u8>), c_int> {
     key_material(circuit_id, k)
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn expected_instance(x: Fr) -> Fr {
     x * x * x + x + Fr::from(5u64)
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn prove_with_rng_impl<R: RngCore>(
     pk_blob: &[u8],
     witness: Fr,
@@ -686,6 +707,7 @@ fn prove_with_rng_impl<R: RngCore>(
 
 /// Proves the registered cubic circuit with a caller-supplied RNG. Used by the
 /// deterministic fixture generator; the C ABI uses `OsRng`.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 #[doc(hidden)]
 pub fn prove_with_rng_v1<R: RngCore>(
     pk_blob: &[u8],
@@ -700,6 +722,7 @@ pub fn prove_with_rng_v1<R: RngCore>(
 // C ABI implementation
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn write_output(out: *mut u8, cap: usize, data: &[u8], out_len: *mut usize) -> c_int {
     if out_len.is_null() {
         return RUSTCRYPTO_ERR_NULL_OUTPUT;
@@ -720,6 +743,7 @@ fn write_output(out: *mut u8, cap: usize, data: &[u8], out_len: *mut usize) -> c
     RUSTCRYPTO_OK
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn prepare_impl(
     circuit_id: u32,
     k: u32,
@@ -757,6 +781,7 @@ fn prepare_impl(
     RUSTCRYPTO_OK
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn prove_impl(
     pk_ptr: *const u8,
     pk_len: usize,
@@ -932,6 +957,7 @@ fn validate_vk_impl(vk_ptr: *const u8, vk_len: usize) -> c_int {
     }
 }
 
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 fn validate_pk_impl(pk_ptr: *const u8, pk_len: usize) -> c_int {
     let bytes = match read_input(
         pk_ptr,
@@ -986,6 +1012,7 @@ fn guard(f: impl FnOnce() -> c_int) -> c_int {
 
 /// Prepares the deterministic IPA params for `k`, keygens the approved circuit,
 /// and writes the v1 VK and PK encodings. Neither step uses randomness.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn rustcrypto_halo2_ipa_bn254_prepare(
     circuit_id: u32,
@@ -1006,6 +1033,7 @@ pub extern "C" fn rustcrypto_halo2_ipa_bn254_prepare(
 
 /// Proves the approved circuit in `pk` and writes the v1 proof encoding.
 /// Uses the operating system CSPRNG for blinding.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn rustcrypto_halo2_ipa_bn254_prove(
     pk_ptr: *const u8,
@@ -1067,6 +1095,7 @@ pub extern "C" fn rustcrypto_halo2_ipa_bn254_vk_validate(
 
 /// Structurally validates a v1 proving key, including the embedded
 /// `halo2_axiom` key for the registered circuit.
+#[cfg(not(feature = "halo2-ipa-verify-only"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn rustcrypto_halo2_ipa_bn254_pk_validate(
     pk_ptr: *const u8,
@@ -1094,7 +1123,7 @@ pub extern "C" fn rustcrypto_halo2_ipa_bn254_instances_validate(
     guard(|| validate_instances_impl(instances_ptr, instances_len))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "halo2-ipa-verify-only")))]
 mod tests {
     use super::*;
 
