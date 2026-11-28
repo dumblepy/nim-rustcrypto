@@ -289,11 +289,11 @@ n=3、k=10 の実測（Ubuntu native、release、1 回の実行。時間は実�
   （[`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md)）。同一 k=10・同一 IPA
   での rows/VK/PK/proof 比較は [`benchmarks-branch85.md`](benchmarks-branch85.md)
   に記録。width 4・3 入力固定の比較デモであり、C ABI/Nim には未登録。
-- **wasm/ICP 実行**: Poseidon2 回路自体は `wasm32-wasip1` で実行済み。
-  browser Worker / ICP canister での Poseidon2 gate prove は未対応。canister
-  verifier は circuit id 2 の VK/証明を検証できる（`halo2-ipa-params-cache`
-  併用可）。任意 arity の canister 側 VK 登録・展開は未検証。
+- **wasm/ICP 実行**: Poseidon2 回路自体は `wasm32-wasip1` と Browser Worker で
+  prove/verify 済み。circuit id 2 の ICP verifier canister も PocketIC で実行済み
+  （canister 内 proving は未試行）。任意 arity の canister 側 VK 登録・展開は
+  未検証。
 - 汎用回路記述子・Noir frontend・VK 復元レジストリへの任意 Poseidon2 登録は
   未実装（登録はコンパイル時の固定 arity のみ）。
-- Spartan+WHIR 側の Poseidon2 gadget、Poseidon1 との制約数・WASM
-  instructions/cycles の実測比較は別タスク。
+- Poseidon1 との制約数・WASM instructions/cycles の実測比較は別タスク
+  （Halo2 rows/proof size の比較は実装済み）。

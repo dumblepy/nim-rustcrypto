@@ -41,9 +41,6 @@ verify-only ICP canister with an IPA params cache (PocketIC-measured), a
 registered 3-input Poseidon2 hash circuit (id 2), and a Poseidon2 Halo2
 custom-gate `wasm32-wasip1` prove/verify run are included. See
 [Halo2 IPA docs](docs/halo2-ipa.md) and [Poseidon2 docs](docs/poseidon2-bn254.md).
-Spartan+WHIR is not shipped in this branch: the Phase 0 gate is recorded as blocked
-in [Spartan+WHIR](docs/spartan-whir.md) and
-[ADR-0085](docs/adr/ADR-0085-spartan-whir.md).
 
 公開鍵による非対話暗号化: [RFC 9180 HPKE Base mode](docs/hpke.md) (`Hpke.generateSecretKey/publicKey/seal/open`)。
 
@@ -103,7 +100,6 @@ Per-primitive and per-protocol guides (English):
 - [Plonky2 / Goldilocks / FRI verifier](docs/plonky2.md)
 - [Halo2 KZG / BN254 verifier (PSE/Axiom SHPLONK profile)](docs/halo2.md)
 - [Halo2 IPA / BN254 (transparent, no trusted setup)](docs/halo2-ipa.md)
-- [Spartan+WHIR Phase 0 (blocked)](docs/spartan-whir.md)
 - [Branch 85 benchmarks (Poseidon1/Poseidon2, IPA 1k/20k)](docs/benchmarks-branch85.md)
 - [ICP canisters (IPA verify / Poseidon2 hash)](docs/ic-branch85.md)
 - [ZKP verifier dependencies, licenses, and target matrix](docs/zkp-dependencies.md)

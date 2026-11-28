@@ -223,10 +223,9 @@ gadget とネイティブの一致を `cargo test --lib poseidon2` で確認す�
 ## 未実装・対象外
 
 - **Poseidon2 の Halo2 custom gate は別モジュールで実装済み**。
-  [`poseidon2-halo2-gate.md`](poseidon2-halo2-gate.md) を参照。ネイティブの
-  Rust typed API/example のみで、Nim/C ABI の circuit id には未登録。
-- Poseidon1 と Poseidon2 の Halo2 rows/proof size 比較は、Poseidon1 の Halo2
-  gate が無いため apples-to-apples ではない。R1CS 制約数・nnz・native 時間・
-  ICP Poseidon2 hash instructions は [`benchmarks-branch85.md`](benchmarks-branch85.md)
-  と [`ic-branch85.md`](ic-branch85.md) に記録。
-- Spartan/WHIR 側の Poseidon2 gadget は Spartan+WHIR 自体が blocked のため未実装。
+  [`poseidon2-halo2-gate.md`](poseidon2-halo2-gate.md) を参照。3 入力固定の
+  `circuit_id=2` と任意 arity `0x100+n`（n=0..=12）が C ABI/Nim に登録済み。
+- Poseidon1 と Poseidon2 の Halo2 rows/proof size 比較は
+  [`poseidon1-halo2-gate.md`](poseidon1-halo2-gate.md) と
+  [`benchmarks-branch85.md`](benchmarks-branch85.md) に記録（同一 k=10・同一 IPA）。
+  R1CS 制約数・nnz・native 時間・ICP Poseidon2 hash instructions も記録済み。

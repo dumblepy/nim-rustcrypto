@@ -60,13 +60,12 @@ so wasm can build without atomics, plus warning-only cleanups. See
 update steps. `ci/check_halo2_axiom_warnings.sh` enforces `-D warnings` for native
 and both wasm targets in the `ZKP integration` job.
 
-## Branch 85: transparent IPA / Poseidon2 / Spartan+WHIR (2026-11-27)
+## Branch 85: transparent IPA / Poseidon2 (2026-11-27)
 
 Branch 85 adds no new proof-system crate or crate version. The transparent IPA
 profile uses the existing vendored `halo2-axiom` 0.5.3 (the branch adds it as a
 direct dependency edge; the crate/version was already present through the KZG
-stack). The Poseidon2 implementation vendors constants only; Spartan+WHIR
-candidates are **not** added to `Cargo.toml` or `Cargo.lock`.
+stack). The Poseidon2 implementation vendors constants only.
 
 ### Halo2 IPA / BN254 (implemented, verified natively and on both wasm targets)
 
@@ -131,26 +130,6 @@ S-box `x^5`, `R_F = 8`, `R_P = 56`. Verified in the development container
 The framing is the Noir/Barretenberg sponge, not the psonet framing; the source
 comment and tests are explicit about this distinction.
 
-### Spartan+WHIR candidates (not added)
-
-No Spartan+WHIR dependency, feature, module, C ABI, or Nim wrapper was added.
-The branch rule explicitly permits recording a blocked item rather than adding
-unsupported code. The full comparison and gate list are in
-`docs/spartan-whir.md` and `docs/adr/ADR-0085-spartan-whir.md`.
-
-| Candidate | Revision | License | Status | Primary blocker |
-|---|---|---|---|---|
-| `worldfnd/provekit` (`main`) | `893f6d5866d52124e12c4a90a71c0f4d625f083b` (2026-11-12) | MIT (`LICENSE.md`); transitive WHIR/Noir/Mavros Apache-2.0, spongefish fork BSD-3-Clause | Not added | Its own source says hiding witness commitment is "not full proof ZK"; native verify transposes/evaluates the R1CS; nightly-only `skyscraper`/`ntt`; `ark-bn254` 0.6 vs existing 0.5; wasm requires atomics/SharedArrayBuffer; `provekit-backend-bn254`/`provekit-spark`/`provekit-wasm` are not on crates.io; proof/key format on `main` is unstable; no audit report found |
-| `ethereum/spartan-whir` (`main`) | `14d6da4211eda59e65cfd0af5e2dcd89d523edc3` (2026-10-22) | **None** (no LICENSE file, no `license` field, GitHub API license null) | Not added | KoalaBear field, not BN254; `MAX_SECURITY_BITS = 123` (default 100); no license; no wasm support in src/`Cargo.toml`/README or CI/targets (the `Cargo.lock` `wasm-bindgen` is transitive); no tags/releases; not on crates.io; no audit |
-| `whir` / `p3-whir` (PCS only) | `worldfnd/whir` pin `d2b16529d0a4fad4f53d088281e9062898d35f5b` | Apache-2.0 | Not added | PCS only; cannot verify an R1CS relation or bind public inputs by itself |
-| `microsoft/Spartan` | `d62b961f9497e3c07a921b6da1457cad467598d9` (2026-09-22) | MIT | Not added | Curve25519 scalar field, not BN254; no WHIR |
-
-`rustcrypto-ffi/Cargo.lock` contains no `provekit`, `spartan-whir`, or
-`pso-poseidon` entry as of 2026-11-27. A crates.io search on the same date
-found `spartan2` 0.9.0 (Microsoft Spartan2, `halo2curves`-based),
-`ark-spartan-golden`, and `slop-spartan`, but none combines BN254 + Spartan +
-WHIR + full ZK + wasm32; `spartan2` does not use WHIR. None was added.
-
 ### Branch 85 target status
 
 | Item | Native | `wasm32-unknown-unknown` | `wasm32-wasip1` | Nim | Status |
@@ -164,7 +143,6 @@ WHIR + full ZK + wasm32; `spartan2` does not use WHIR. None was added.
 | Halo2 IPA ICP verify | PocketIC update call | verify-only canister, `ic0`-only imports, params cache cold/warm | — | No | Implemented (not mainnet) |
 | Poseidon2 IPA ICP verify | PocketIC update call (id 2 VK pinned) | verify-only canister, `ic0`-only imports, cold/warm | — | No | Implemented (not mainnet) |
 | Poseidon2 ICP hash | PocketIC update call | canister, `ic0`-only imports | — | No | Implemented (not mainnet) |
-| Spartan+WHIR / BN254 | Not implemented | Not implemented | Not implemented | Not implemented | **Blocked** |
 
 The table is a status record. A successful compile alone is not treated as
 success; the wasm entries are actual Node/WASI/Chromium executions and the ICP
